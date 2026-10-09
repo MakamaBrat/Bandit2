@@ -1,17 +1,15 @@
 // Minimal engine for the web port: asset loading, sprites/animations, tile map, collision.
-export const TICK = 100; // ms per animation time unit = one game tick (original run() loop is 100 ms)
+export const TICK = 50; // ms per animation time unit (tune to match the original)
 const cache = { sprites: {}, maps: {} };
 const loadImg = src => new Promise(r => { const i = new Image(); i.onload = () => r(i); i.onerror = () => r(null); i.src = src; });
 
-// pal = 0: default palette (frames/), 1..3: alternative palettes (frames_pal1..3/) used e.g. by pedestrians
 export async function loadSprite(id, pal = 0) {
   const key = pal ? `${id}#${pal}` : id;
   if (cache.sprites[key]) return cache.sprites[key];
-  const base = `assets/sprites/${id}`;
-  const info = pal && cache.sprites[id] ? cache.sprites[id].info : await (await fetch(`${base}/sprite.json`)).json();
-  const dir = pal ? `frames_pal${pal}` : 'frames';
+  const base = `assets/sprites/${id}`, dir = pal ? `frames_pal${pal}` : 'frames';
+  const info = await (await fetch(`${base}/sprite.json`)).json();
   const frames = await Promise.all(info.frames.map(f => loadImg(`${base}/${dir}/f${String(f.i).padStart(3, '0')}.png`)));
-  return (cache.sprites[key] = { id, info, frames, pal });
+  return (cache.sprites[key] = { id, info, frames });
 }
 
 // flip: bit0 = mirror X, bit1 = mirror Y. Origin (x,y) is the frame anchor.
@@ -31,20 +29,24 @@ export function animAt(spr, a, t) {
   return seq[seq.length - 1];
 }
 
-export async function loadMap(tag) {
-  if (cache.maps[tag]) return cache.maps[tag];
-  const data = await (await fetch(`assets/maps/${tag}.json`)).json();
-  const image = await loadImg(`assets/maps/${tag}_full.png`);
-  const m = { tag, data, image, w: image.width, h: image.height };
-  // tile at pixel -> {block, tile, collision}
-  m.tileAt = (px, py) => {
+// tile at pixel -> {block, tile, collision}; out of bounds counts as solid (2)
+export function tileLookup(data) {
+  return (px, py) => {
     const T = data.tileSize, tx = Math.floor(px / T), ty = Math.floor(py / T);
     const bw = data.tilesPerBlockW, bh = data.tilesPerBlockH;
     if (tx < 0 || ty < 0 || tx >= data.blocksW * bw || ty >= data.blocksH * bh) return { block: -1, tile: -1, collision: 2 };
     const block = data.blockMap[Math.floor(tx / bw) + Math.floor(ty / bh) * data.blocksW] & 0x1f;
     const k = (tx % bw) + (ty % bh) * bw, tile = data.tileIndex[block][k];
-    return { block, tile, collision: data.collision[tile] ?? 0 }; // meaning of values 0..3: see tools/decompiled_java (d.t)
+    return { block, tile, collision: data.collision[tile] ?? 0 }; // 0 road, 1 sidewalk, 2 solid, 3 door/special
   };
+}
+
+export async function loadMap(tag) {
+  if (cache.maps[tag]) return cache.maps[tag];
+  const data = await (await fetch(`assets/maps/${tag}.json`)).json();
+  const image = await loadImg(`assets/maps/${tag}_full.png`);
+  const m = { tag, data, image, w: image.width, h: image.height };
+  m.tileAt = tileLookup(data);
   return (cache.maps[tag] = m);
 }
 

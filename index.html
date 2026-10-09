@@ -1,15 +1,17 @@
 <!doctype html>
-<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>mygame web port (WIP)</title>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>mygame web port — prototype</title>
 <style>
- body{margin:0;background:#1b1b24;color:#ddd;font:13px system-ui,sans-serif;display:flex;flex-direction:column;align-items:center;gap:8px;padding:8px}
- canvas{image-rendering:pixelated;background:#000;width:min(100%,360px);aspect-ratio:240/320;border:1px solid #444;touch-action:none}
- small,#info{max-width:480px;text-align:center;color:#aab}
+ body{margin:0;background:#1b1b24;color:#ddd;font:14px system-ui,sans-serif;display:flex;flex-direction:column;align-items:center;gap:8px;padding:8px;touch-action:none}
+ canvas{image-rendering:pixelated;background:#000;height:min(75vh,640px);aspect-ratio:3/4;border:1px solid #444}
+ .pad{display:grid;grid-template-columns:repeat(3,56px);gap:6px}.pad button{height:48px;font-size:20px}
+ select,button{font:inherit;padding:4px 8px}
 </style></head><body>
 <canvas id="c" width="240" height="320"></canvas>
-<div id="info">загрузка…</div>
-<small>Стрелки или WASD — ходьба (комбинации дают диагонали), цифры 1–9 как на телефоне, C — показать коллизии.
-Карта: <a href="?map=city1_h">city1_h</a> · <a href="?map=city2_s">city2_s</a> · <a href="viewer.html">просмотр ассетов</a>.
-Запуск: <code>python3 -m http.server</code> → http://localhost:8000</small>
+<div class="row"><select id="city"><option value="city1_h">Город 1</option><option value="city2_s">Город 2</option></select>
+ <a href="viewer.html" style="color:#8cf">просмотр спрайтов</a></div>
+<div class="pad"><button id="ebtn">E</button><button id="qbtn">Q</button><button data-k="fire">🔫</button><button data-k="up">▲</button><button data-k="shift">⚡</button><button data-k="left">◀</button><button data-k="down">▼</button><button data-k="right">▶</button></div>
+<div id="info"></div>
+<small>Стрелки/WASD — идти, Shift — бежать, E — сесть/выйти из машины, Пробел — огонь, Q — сменить оружие, F — отладка. Запуск: <code>python3 -m http.server</code></small>
 <script type="module" src="js/game.js"></script>
 </body></html>

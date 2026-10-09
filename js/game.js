@@ -1,108 +1,80 @@
-// Browser shell: fixed 100 ms tick (as the original run() loop), state machine T, rendering to a 240x320 canvas.
-import { loadMap, loadSprite, drawFrame } from './engine.js';
-import { Input } from './input.js';
-import * as S from './sim.js';
-import * as P from './peds.js';
+import { loadMap, loadSprite, drawMap, drawFrame, animAt } from './engine.js';
+import { newPlayer, step, animIndex } from './player.js';
+import { spawnCars, stepCar, nearestCar, exitSpot, CAR_SPRITES } from './vehicle.js';
+import { spawnPeds, stepPed, pedAnim, topUpPeds } from './ped.js';
+import { spawnTraffic, stepTraffic } from './traffic.js';
+import { carHits, carVsCar } from './collide.js';
+import { newCop, stepCop, copAnim, newWanted, addHeat, stars, stepWanted, manageCops, hurtHero, reviveHero, HERO_HP } from './police.js';
+import { findSpawn } from './player.js';
+import { WEAPONS, arm, nextWeapon, stepArm, fire, armAnim, stepBullets, scare } from './weapons.js';
+const cv = document.getElementById('c'), ctx = cv.getContext('2d'), $ = id => document.getElementById(id);
+const VW = cv.width, VH = cv.height;
+let cops = [], wanted = newWanted(), wastedT = -1, bullets = [], map, hero, heroPal = {}, peds = [], p, cam = { x: 0, y: 0 }, debug = false, cars = [], carSpr = {}, drive = null, hint = '';
+const keys = {};
+const map_ = { ArrowLeft: 'left', a: 'left', ArrowRight: 'right', d: 'right', ArrowUp: 'up', w: 'up', ArrowDown: 'down', s: 'down', left: 'left', right: 'right', up: 'up', down: 'down' };
+addEventListener('keydown', e => { keys[e.key.toLowerCase()] = keys[e.key] = true; if (e.key === 'f') debug = !debug; if ((e.key === 'e' || e.key === 'E') && !e.repeat) toggleCar(); if ((e.key === 'q' || e.key === 'Q') && !e.repeat && !drive) nextWeapon(p); if (e.key.startsWith('Arrow') || e.key === ' ') e.preventDefault(); });
+addEventListener('keyup', e => { keys[e.key.toLowerCase()] = keys[e.key] = false; });
+const input = () => { const i = { run: !!(keys.Shift || keys.shift) }; for (const k in map_) if (keys[k]) i[map_[k]] = true; return i; };
 
-const cv = document.getElementById('c'), ctx = cv.getContext('2d');
-const dbg = document.getElementById('info');
-const params = new URLSearchParams(location.search);
-const input = new Input(); input.attach(window);
-let showColl = params.has('coll');
-addEventListener('keydown', e => { if (e.code === 'KeyC') showColl = !showColl; });
-
-// T: game state, a small subset of the original numbering (d.ac()): 2 = level load, 7 = in-game.
-let T = 2;
-let world, mapImg, spr, sprPal, st, anim, pw, ctrOff = { x: 0, y: -18 };
-let prev = null;                                        // state at the previous tick, for interpolation
-const snap = () => ({ a: st.p.a, b: st.p.b, fW: st.cam.fW, fX: st.cam.fX });
-const COLL_COLORS = ['rgba(0,255,0,.28)', 'rgba(0,120,255,.28)', 'rgba(255,0,0,.35)', 'rgba(255,255,0,.45)'];
-
-async function load() {
-  const tag = params.get('map') || 'city1_h';
-  const [tables, map, objects] = await Promise.all([fetch('assets/tables/tables.json').then(r => r.json()), loadMap(tag), fetch(`assets/maps/${tag}_objects.json`).then(r => r.json())]);
-  world = S.makeWorld(map.data, tables); mapImg = map.image;
-  pw = P.makePedWorld(world, objects, params.has('seed') ? +params.get('seed') : (Date.now() & 0xFFFF));
-  spr = await loadSprite('i_00');                       // player on foot: bB[2], animations d()*30 (+2 walking)
-  sprPal = [spr, ...await Promise.all([1, 2, 3].map(n => loadSprite('i_00', n)))];   // pedestrian palettes
-  anim = new S.AnimPlayer(spr.info);
-  const sp = S.findSpawn(world);
-  const p = S.makePlayer(sp.x, sp.y, 12), cam = S.makeCamera();
-  S.cameraSnap(world, cam, p.a - 30720, p.b - 35328);
-  st = { p, cam, tick: 0 };
-  prev = snap();
-  T = 7;
+function toggleCar() {
+  if (drive) { const sp = exitSpot(map, drive); if (!sp) return; p.x = sp.x; p.y = sp.y; drive.speed = 0; drive = null; return; }
+  const c = nearestCar(cars, p); if (c) { drive = c; c.ai = false; }
 }
+async function start(tag) { map = await loadMap(tag); p = arm(newPlayer(map)); p.hp = HERO_HP; bullets = []; cops = []; wanted = newWanted(); wastedT = -1; drive = null; cars = [...spawnCars(map, p, 5), ...spawnTraffic(map, p, 8)]; peds = spawnPeds(map, p, 14); }
+$('city').onchange = e => start(e.target.value);
+// touch / on-screen buttons
+document.querySelectorAll('[data-k]').forEach(b => { const k = b.dataset.k; b.onpointerdown = () => keys[k] = true; b.onpointerup = b.onpointerleave = () => keys[k] = false; });
 
-function playerSprite() {                               // current frame + bbox centre (stands in for b.m()/b.n())
-  const a = anim.cur(); if (!a) return null;
-  const im = spr.frames[a.frame], m = spr.info.frames[a.frame];
-  return { a, im, m };
-}
-
-function update() {                                     // one tick of at()
-  prev = snap();
-  input.tick();
-  const now = st.tick * S.TICK_MS;
-  const dir = S.keyDirection(input.an);
-  S.gameTick(world, st, dir, now, ctrOff);
-  anim.set(S.playerAnimIndex(st.p)); anim.tick();
-  const view = { fU: st.cam.fW >> 8, fV: st.cam.fX >> 8 };
-  P.pedsTick(pw, view, st.p);                         // bq(): spawn + every pedestrian's c()
-  for (const q of pw.peds) {
-    q.anim ||= new S.AnimPlayer(spr.info);
-    q.anim.set(P.pedAnim(q));
-    const vis = (q.a >> 8) > view.fU - 30 && (q.a >> 8) < view.fU + 270 && (q.b >> 8) > view.fV - 30 && (q.b >> 8) < view.fV + 310;
-    if (vis) q.anim.tick();                           // original only animates entities that are drawn
+$('ebtn').onpointerdown = toggleCar;
+$('qbtn').onpointerdown = () => { if (!drive) nextWeapon(p); };
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  const inp = p.dead ? {} : input();
+  if (drive) stepCar(map, drive, inp, dt); else step(map, p, inp, dt);
+  const tx = (drive || p).x, ty = (drive || p).y;
+  if (p.dead) { wastedT += dt; if (wastedT > 2.5) { const s = findSpawn(map); reviveHero(p, s.x, s.y); cops = []; wanted = newWanted(); wastedT = -1; } }
+  const obst = [p, ...peds, ...cars];
+  for (const c of cars) if (c !== drive) { if (c.ai) stepTraffic(map, c, obst, dt); else if (Math.abs(c.speed) > 0) stepCar(map, c, {}, dt); }   // traffic drives, abandoned cars roll to a stop
+  for (const q of peds) stepPed(map, q, dt);
+  stepArm(p, dt);
+  if (!drive && !p.dead && (keys[' '] || keys.fire)) { const nb = fire(p); if (nb.length) { bullets.push(...nb); scare(peds, p.x, p.y); } }
+  const onHit = (kind, t) => {
+    if (kind === 'cop') { if (t.dead) addHeat(wanted, 60); else addHeat(wanted, 10); }
+    else if (kind === 'hero' && hurtHero(p, drive ? 4 : 8)) { if (drive) { p.x = drive.x; p.y = drive.y; drive = null; } wastedT = 0; }
+  };
+  for (const q of stepBullets(map, bullets, peds, cars, dt, { cops, hero: p, driving: drive, onHit })) { scare(peds, q.x, q.y, 120); addHeat(wanted, 30); }
+  manageCops(map, wanted, cops, tx, ty); stepWanted(wanted, cops, tx, ty, dt);
+  for (const c of cops) { const b = stepCop(map, c, tx, ty, dt); if (b) bullets.push(b); }
+  topUpPeds(map, drive || p, peds, 14);
+  for (let i = 0; i < cars.length; i++) {
+    const c = cars[i];
+    const hit = carHits(map, c, peds, drive ? null : p); if (c === drive) for (const o of hit) if (o !== p) addHeat(wanted, 20);
+    for (let j = i + 1; j < cars.length; j++) carVsCar(map, c, cars[j]);
   }
-  const f = playerSprite();
-  if (f && f.im && f.m) ctrOff = { x: f.m.ox + (f.im.width >> 1), y: f.m.oy + (f.im.height >> 1) };
-  st.tick++;
-}
-
-// Logic runs at 10 ticks/s like the original; drawing runs every display frame and blends the previous and
-// current tick (alpha 0..1) so movement and camera are smooth. Sprite animation frames still change per tick.
-function draw(alpha = 1) {
-  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, 240, 320);
-  const lerp = (x0, x1) => x0 + (x1 - x0) * alpha;
-  const camW = lerp(prev.fW, st.cam.fW), camX = lerp(prev.fX, st.cam.fX);
-  const pa = lerp(prev.a, st.p.a), pb = lerp(prev.b, st.p.b);
-  const fU = Math.round(camW / 256), fV = Math.round(camX / 256);
-  ctx.save(); ctx.beginPath(); ctx.rect(S.VIEW_X, S.VIEW_Y, S.VIEW_W, S.VIEW_H); ctx.clip();
-  ctx.drawImage(mapImg, fU, fV, S.VIEW_W, S.VIEW_H, S.VIEW_X, S.VIEW_Y, S.VIEW_W, S.VIEW_H);
-  if (showColl) {
-    const T24 = world.T;
-    for (let ty = Math.floor(fV / T24); ty <= Math.floor((fV + S.VIEW_H) / T24); ty++)
-      for (let tx = Math.floor(fU / T24); tx <= Math.floor((fU + S.VIEW_W) / T24); tx++) {
-        ctx.fillStyle = COLL_COLORS[world.collisionAt((tx * T24 + 1) << 8, (ty * T24 + 1) << 8)];
-        ctx.fillRect(tx * T24 - fU, ty * T24 - fV + S.VIEW_Y, T24, T24);
-      }
-  }
-  const px = Math.round(pa / 256) - fU, py = Math.round(pb / 256) - fV + S.VIEW_Y;
-  const ents = pw.peds.map(q => ({ b: lerp(q.pb, q.b), x: Math.round(lerp(q.pa, q.a) / 256) - fU, y: Math.round(lerp(q.pb, q.b) / 256) - fV + S.VIEW_Y, anim: q.anim, spr: sprPal[q.pal] }));
-  ents.push({ b: pb, x: px, y: py, anim, spr, player: true });
-  ents.sort((u, v) => u.b - v.b);                     // assumption: draw order by depth (original uses layer lists)
-  for (const e of ents) {
-    const a = e.anim && e.anim.cur(); if (!a) continue;
-    if (e.x < -40 || e.x > 280 || e.y < -20 || e.y > 340) continue;
-    drawFrame(ctx, e.spr, a.frame, e.x + a.dx, e.y + a.dy, a.flip);
-  }
-  if (showColl) {                                       // hitboxes (21x15 px around the anchor)
-    ctx.strokeStyle = '#fff'; ctx.strokeRect(px - 10.5, py - 7.5, 21, 15);
-    ctx.strokeStyle = '#0ff'; for (const e of ents) if (!e.player) ctx.strokeRect(e.x - 10.5, e.y - 7.5, 21, 15);
-  }
-  ctx.restore();
-  ctx.fillStyle = '#fff'; ctx.font = '9px monospace'; ctx.textBaseline = 'top';
-  ctx.fillText('x ' + (st.p.a >> 8) + ' y ' + (st.p.b >> 8), 2, 4);
-  dbg.textContent = `T=${T} tick=${st.tick} dir=${st.p.dir} h=${st.p.h} cam=${st.cam.fW >> 8},${st.cam.fX >> 8} пешеходов=${pw.peds.length}  [C — коллизии]`;
-}
-
-let last = performance.now(), acc = 0;
-function frame(t) {
+  const fx = drive ? drive.x : p.x, fy = drive ? drive.y : p.y;
+  cam.x = fx - VW / 2; cam.y = fy - VH / 2;
+  const c = drawMap(ctx, map, cam.x, cam.y, VW, VH); cam.x = c.camX; cam.y = c.camY;
+  const sx = p.x - cam.x, sy = p.y - cam.y;
+  const aa = !drive && armAnim(p), ai = aa || animIndex(p), a = animAt(hero, ai, aa ? p.since * 1000 : p.t * 1000);
+  const items = cars.map(c => ({ y: c.y, draw: () => { const spr = carSpr[c.type], an = spr.info.animations[c.anim][0]; drawFrame(ctx, spr, an.frame, c.x - cam.x, c.y - cam.y, an.flip); } }));
+  for (const q of peds) items.push({ y: q.y + 1, draw: () => { const s = q.kind === 'woman' ? hero : heroPal[q.pal], a = animAt(s, pedAnim(q), q.t * 1000); if (a) drawFrame(ctx, s, a.frame, q.x - cam.x + a.dx, q.y - cam.y + a.dy, a.flip); } });
+  for (const c of cops) items.push({ y: c.y + 1, draw: () => { const k = copAnim(c), a = animAt(hero, k, (c.since < 0.6 ? c.since : c.t) * 1000); if (a) drawFrame(ctx, hero, a.frame, c.x - cam.x + a.dx, c.y - cam.y + a.dy, a.flip); } });
+  if (!drive) items.push({ y: p.y + 1, draw: () => { if (a) drawFrame(ctx, hero, a.frame, sx + a.dx, sy + a.dy, a.flip); } });
+  items.sort((u, v) => u.y - v.y).forEach(i => i.draw());
+  ctx.fillStyle = '#ff0'; for (const b of bullets) ctx.fillRect(b.x - cam.x - 1, b.y - cam.y - 18, 2, 2);
+  ctx.fillStyle = '#400'; ctx.fillRect(4, 14, 52, 5); ctx.fillStyle = '#e33'; ctx.fillRect(4, 14, 52 * Math.max(0, p.hp) / HERO_HP, 5);
+  ctx.fillStyle = '#fc0'; ctx.font = '10px monospace'; ctx.fillText('★'.repeat(stars(wanted)) + '☆'.repeat(3 - stars(wanted)), VW - 44, 12);
+  if (p.dead) { ctx.fillStyle = 'rgba(0,0,0,.45)'; ctx.fillRect(0, 0, VW, VH); ctx.fillStyle = '#e33'; ctx.font = 'bold 20px monospace'; ctx.fillText('WASTED', VW / 2 - 40, VH / 2); ctx.font = '8px monospace'; }
+  const near = !drive && nearestCar(cars, p);
+  if (!drive) { ctx.fillStyle = '#fff'; ctx.fillText(WEAPONS[p.weapon].name + ' (Q)', 4, 10); }
+  hint = drive ? 'E — выйти · ↑ газ · ↓ тормоз/назад · ←→ руль' : near ? 'E — сесть в машину' : 'Пробел — огонь · Q — оружие';
+  ctx.fillStyle = '#fff'; ctx.font = '8px monospace'; ctx.fillText(hint, 4, VH - 6);
+  if (drive) ctx.fillText(Math.round(Math.abs(drive.speed)) + ' km/h', 4, 10);
+  if (debug) {
+    ctx.fillStyle = 'rgba(255,0,0,.8)'; ctx.fillRect(sx - 1, sy - 1, 3, 3);
+    const t = map.tileAt(p.x, p.y); $('info').textContent = `x ${(drive||p).x|0} y ${(drive||p).y|0} · тайл ${t.tile} · коллизия ${t.collision} · anim ${ai}`;
+  } else $('info').textContent = '';
   requestAnimationFrame(frame);
-  if (T !== 7) return;
-  acc += Math.min(t - last, 500); last = t;
-  while (acc >= S.TICK_MS) { acc -= S.TICK_MS; update(); }
-  draw(acc / S.TICK_MS);
 }
-await load(); draw(1); requestAnimationFrame(frame);
+hero = await loadSprite('i_00'); for (const k of [1, 2, 3]) heroPal[k] = await loadSprite('i_00', k); for (const id of CAR_SPRITES) carSpr[id] = await loadSprite(id); await start('city1_h'); requestAnimationFrame(frame);
