@@ -1,0 +1,70 @@
+// Smoke test: runs js/game.js against a tiny fake DOM, simulates touch/zoom input and checks nothing throws.
+import { readFileSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
+const listeners = {}, mk = () => ({ style: {}, dataset: {}, onclick: null, onpointerdown: null, onpointerup: null, onpointerleave: null, onchange: null, onfocus: null, textContent: '', width: 240, height: 320, addEventListener(t, f) { (this.l ||= {})[t] = f; }, setPointerCapture() {},
+  getContext: () => new Proxy({}, { get: () => () => {}, set: () => true }) });
+const els = {}; const el = id => els[id] ||= mk();
+globalThis.window = globalThis; globalThis.innerWidth = 1280; globalThis.innerHeight = 720;
+globalThis.localStorage = { _: {}, getItem(k) { return this._[k] ?? null; }, setItem(k, v) { this._[k] = String(v); } };
+globalThis.addEventListener = (t, f) => (listeners[t] ||= []).push(f);
+globalThis.document = { getElementById: el, querySelectorAll: () => [el('qbtn'), el('ebtn')], documentElement: {}, fullscreenElement: null };
+globalThis.performance ||= { now: () => Date.now() };
+let raf; globalThis.requestAnimationFrame = f => { raf = f; };
+const img = { width: 6144, height: 3840 };
+globalThis.Image = class { set src(v) { this._s = v; setTimeout(() => this.onload && this.onload(), 0); } get width() { return 6144; } get height() { return 3840; } };
+globalThis.fetch = async u => { const path = String(u).replace(/^\//, ''); return { json: async () => JSON.parse(readFileSync(path)), ok: true }; };
+globalThis.createImageBitmap = async () => img;
+const doc = globalThis.document; doc.createElement = () => { const c = mk(); c.getContext = el('c').getContext; return c; };
+let err = null; process.on('unhandledRejection', e => { err = e; });
+await import(pathToFileURL(process.cwd() + '/js/game.js').href);
+await new Promise(r => setTimeout(r, 400));
+let ok = true; const t = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) ok = false; };
+t(!err, 'game.js loads and starts without errors' + (err ? ': ' + err.message : ''));
+t(typeof raf === 'function', 'frame loop is running');
+const cv = el('c'); const L = cv.l || {};
+t(!!(L.pointerdown && L.pointermove && L.pointerup && L.wheel), 'canvas has pointer + wheel handlers');
+let now = 0; const tick = n => { for (let i = 0; i < n; i++) { now += 33; const f = raf; f(now); } };
+tick(5); t(true, '5 frames run');
+// zoom by wheel
+const z0 = cv.width; L.wheel({ preventDefault() {}, deltaY: -100 }); t(cv.width < z0, `wheel zoom in shrinks the logical view (${z0} -> ${cv.width})`);
+el('zm').onclick(); el('zm').onclick(); t(cv.width > z0 - 1, 'zoom out button enlarges the view');
+// canvas covers the window
+t(parseFloat(cv.style.width) >= innerWidth && parseFloat(cv.style.height) >= innerHeight, `canvas covers the window (${cv.style.width} x ${cv.style.height})`);
+// touch: press to the left of the hero at the centre of the screen
+const cx = cv.width * 0 + innerWidth / 2, cy = innerHeight / 2;
+L.pointerdown({ pointerId: 1, clientX: cx - 120, clientY: cy }); tick(30); L.pointerup({ pointerId: 1 }); tick(2);
+t(true, 'touch hold left of the hero runs without errors');
+L.pointerdown({ pointerId: 1, clientX: cx, clientY: cy }); L.pointerdown({ pointerId: 2, clientX: cx + 100, clientY: cy }); L.pointermove({ pointerId: 2, clientX: cx + 200, clientY: cy }); const wz = cv.width; tick(2); L.pointerup({ pointerId: 1 }); L.pointerup({ pointerId: 2 }); t(true, 'two-finger pinch handled');
+
+// ---- tap a car: hero walks to it and gets in ----
+const D = globalThis.__dbg;
+const toScreen = o => ({ x: (o.x - D().cam.x) * D().zoom, y: (o.y - D().cam.y) * D().zoom });
+{
+  const d = D(), car = d.cars.find(c => !c.ai); d.p.x = car.x - 70; d.p.y = car.y; d.cars.forEach(c => { if (c !== car) c.ai = false; });
+  tick(3); const s = toScreen(car);
+  L.pointerdown({ pointerId: 1, clientX: s.x, clientY: s.y }); L.pointerup({ pointerId: 1 });
+  let sat = false; for (let i = 0; i < 240 && !sat; i++) { tick(1); sat = D().drive === car; }
+  t(sat, 'tapping a car makes the hero walk to it and get in');
+  // drive by holding right of the car: gas + steer, then exit with E
+  const x0 = car.x, y0 = car.y; const s2 = toScreen(car);
+  L.pointerdown({ pointerId: 1, clientX: s2.x + 120, clientY: s2.y }); tick(60); L.pointerup({ pointerId: 1 });
+  t(Math.hypot(car.x - x0, car.y - y0) > 20, `holding on the screen drives the car (${Math.round(Math.hypot(car.x - x0, car.y - y0))}px)`);
+}
+// ---- hold left of the hero on foot: moves left ----
+{
+  const d = D(); if (d.drive) el('ebtn').onpointerdown(); tick(30);
+  d.cars.forEach(c => { c.x = 20; c.y = 20; c.speed = 0; c.ai = false; }); tick(2);   // no car next to the hero, so taps mean 'run', not 'get in'
+  const x0 = D().p.x, sp = toScreen(D().p); L.pointerdown({ pointerId: 1, clientX: sp.x - 150, clientY: sp.y - 12 }); tick(30); L.pointerup({ pointerId: 1 });
+  t(D().p.x < x0 - 5, `touch to the left of the hero runs left (${Math.round(D().p.x - x0)}px)`);
+  const y1 = D().p.y, sp2 = toScreen(D().p); L.pointerdown({ pointerId: 1, clientX: sp2.x, clientY: sp2.y + 150 }); tick(30); L.pointerup({ pointerId: 1 });
+  t(D().p.y > y1 + 5, `touch below the hero runs down (${Math.round(D().p.y - y1)}px)`);
+}
+// ---- moving traffic is actually visible around the hero ----
+while (D().zoom > 3.2) el('zm').onclick();   // typical zoom
+for (const city of ['city1_h', 'city2_s']) {
+  el('city').onchange({ target: { value: city } }); await new Promise(r => setTimeout(r, 300));
+  let seen = 0, frames = 0, moving = 0;
+  for (let i = 0; i < 30 * 60; i++) { tick(1); const d = D(); frames++; const vis = d.cars.filter(c => c.ai && Math.abs(c.x - d.p.x) < d.VW / 2 && Math.abs(c.y - d.p.y) < d.VH / 2); if (vis.length) seen++; if (vis.some(c => Math.abs(c.speed) > 20)) moving++; }
+  t(seen / frames > 0.4 && moving / frames > 0.2, `${city}: a traffic car is in view ${Math.round(100 * seen / frames)}% of the time, moving in ${Math.round(100 * moving / frames)}%`);
+}
+process.exit(ok ? 0 : 1);

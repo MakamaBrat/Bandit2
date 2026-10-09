@@ -20,11 +20,16 @@ export function stepTraffic(map, c, obstacles, dt, rnd = Math.random) {
     } else c.want = cur;
   }
   const [fx, fy] = fwd(c.heading);
-  const blocked = !(c.ignore > 0) && obstacles.some(o => { if (o === c) return false; const dx = o.x - c.x, dy = o.y - c.y, f = dx * fx + dy * fy, s = Math.abs(dx * fy - dy * fx); return f > 0 && f < 34 && s < 14; });
+  const blocked = !(c.ignore > 0) && obstacles.some(o => { if (o === c) return false; if (o.heading === undefined && map.tileAt(o.x, o.y).collision !== 0) return false;   // people on the pavement do not stop traffic
+    const dx = o.x - c.x, dy = o.y - c.y, f = dx * fx + dy * fy, s = Math.abs(dx * fy - dy * fx); return f > 0 && f < 34 && s < 12; });
   c.blockT = blocked ? (c.blockT || 0) + dt : 0;                       // head-on deadlock: back off and turn round
   if (c.blockT > 2) { c.want = (c.want + 180) % 360; c.blockT = 0; c.ignore = 1.5; }
   if (c.ignore > 0) c.ignore -= dt;
   const turning = Math.abs(angDiff(c.heading, c.want)) > 4;
+  if (turning && !blocked && Math.abs(c.speed) < 4) {                    // standing still against a wall: steering needs movement, so pivot on the spot
+    const diff = angDiff(c.heading, c.want), nh = (c.heading + Math.sign(diff) * Math.min(Math.abs(diff), 150 * dt) + 360) % 360;
+    if (!carBlocked(map, c.x, c.y, nh)) c.heading = nh;
+  }
   const steer = turning ? Math.sign(angDiff(c.heading, c.want)) : 0;
   const cruise = blocked ? 0 : turning ? 35 : CRUISE;
   const inp = { up: c.speed < cruise, down: c.speed > cruise + 8, left: steer > 0, right: steer < 0 };
@@ -45,4 +50,20 @@ export function spawnTraffic(map, around, n = 8, rnd = Math.random) {
     out.push(newTrafficCar(CAR_SPRITES[out.length % CAR_SPRITES.length], x, y, h));
   }
   return out;
+}
+
+// Keeps `n` AI cars around the hero: spawned on roads in a ring just outside the view, removed when far away (cars the hero touched stay).
+export function topUpTraffic(map, around, cars, n = 8, rnd = Math.random, minR = 150, maxR = 450) {
+  const T = map.data.tileSize;
+  for (let i = cars.length - 1; i >= 0; i--) { const c = cars[i]; if (c.ai && Math.hypot(c.x - around.x, c.y - around.y) > maxR + 250) cars.splice(i, 1); }
+  let count = cars.filter(c => c.ai).length;
+  for (let tries = 0; tries < 40 && count < n; tries++) {
+    const a = rnd() * Math.PI * 2, r = minR + rnd() * (maxR - minR);
+    const x = Math.floor((around.x + Math.cos(a) * r) / T) * T + T / 2, y = Math.floor((around.y + Math.sin(a) * r) / T) * T + T / 2;
+    if (x < 0 || y < 0 || x > map.w || y > map.h || cars.some(o => Math.hypot(o.x - x, o.y - y) < 60)) continue;
+    const h = HEADS.find(h => roadAhead(map, x, y, h, 40) && !carBlocked(map, x, y, h) && map.tileAt(x, y).collision === 0);
+    if (h === undefined) continue;
+    cars.push(newTrafficCar(CAR_SPRITES[Math.floor(rnd() * CAR_SPRITES.length)], x, y, h)); count++;
+  }
+  return cars;
 }

@@ -53,10 +53,10 @@ export function spawnPeds(map, around, n = 14, rnd = Math.random) {
 }
 
 // Removes bodies that lay long enough and spawns new pedestrians out of sight so the streets stay populated.
-export function topUpPeds(map, around, peds, n = 14, rnd = Math.random) {
-  for (let i = peds.length - 1; i >= 0; i--) if (peds[i].dead && peds[i].deadT > 12) peds.splice(i, 1);
+export function topUpPeds(map, around, peds, n = 14, rnd = Math.random, minR = 220, maxR = 520) {
+  for (let i = peds.length - 1; i >= 0; i--) if ((peds[i].dead && peds[i].deadT > 12) || (!peds[i].dead && Math.hypot(peds[i].x - around.x, peds[i].y - around.y) > maxR + 300)) peds.splice(i, 1);
   for (let tries = 0; tries < 20 && peds.length < n; tries++) {
-    const a = rnd() * Math.PI * 2, r = 220 + rnd() * 300, x = around.x + Math.cos(a) * r, y = around.y + Math.sin(a) * r;
+    const a = rnd() * Math.PI * 2, r = minR + rnd() * (maxR - minR), x = around.x + Math.cos(a) * r, y = around.y + Math.sin(a) * r;
     if (!canStand(map, x, y) || peds.some(o => Math.hypot(o.x - x, o.y - y) < 24)) continue;
     const woman = rnd() < 0.34; peds.push(newPed(x, y, woman ? 0 : 1 + Math.floor(rnd() * 3), rnd, woman ? 'woman' : 'man'));
   }

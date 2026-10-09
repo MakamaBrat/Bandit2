@@ -1,17 +1,27 @@
 <!doctype html>
-<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes">
 <title>mygame web port — prototype</title>
 <style>
- body{margin:0;background:#1b1b24;color:#ddd;font:14px system-ui,sans-serif;display:flex;flex-direction:column;align-items:center;gap:8px;padding:8px;touch-action:none}
- canvas{image-rendering:pixelated;background:#000;height:min(75vh,640px);aspect-ratio:3/4;border:1px solid #444}
- .pad{display:grid;grid-template-columns:repeat(3,56px);gap:6px}.pad button{height:48px;font-size:20px}
- select,button{font:inherit;padding:4px 8px}
+ html,body{margin:0;height:100%;overflow:hidden;background:#000;color:#ddd;font:14px system-ui,sans-serif;touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
+ canvas{position:fixed;left:0;top:0;image-rendering:pixelated;touch-action:none;background:#000}
+ .ui{position:fixed;display:flex;gap:6px;align-items:center;z-index:2}
+ #top{left:calc(6px + env(safe-area-inset-left));top:calc(6px + env(safe-area-inset-top))}
+ #btns{right:calc(10px + env(safe-area-inset-right));bottom:calc(14px + env(safe-area-inset-bottom));flex-direction:column-reverse}
+ button,select{font:inherit;color:#fff;background:rgba(20,20,30,.55);border:1px solid rgba(255,255,255,.35);border-radius:10px;padding:4px 10px;touch-action:none}
+ #btns button{width:60px;height:60px;font-size:22px;border-radius:50%}
+ #top button{min-width:36px;height:34px}
+ #info{position:fixed;left:6px;bottom:calc(22px + env(safe-area-inset-bottom));font:11px monospace;color:#9f9;z-index:2;pointer-events:none}
+ a{color:#8cf}
 </style></head><body>
 <canvas id="c" width="240" height="320"></canvas>
-<div class="row"><select id="city"><option value="city1_h">Город 1</option><option value="city2_s">Город 2</option></select>
- <a href="viewer.html" style="color:#8cf">просмотр спрайтов</a></div>
-<div class="pad"><button id="ebtn">E</button><button id="qbtn">Q</button><button data-k="fire">🔫</button><button data-k="up">▲</button><button data-k="shift">⚡</button><button data-k="left">◀</button><button data-k="down">▼</button><button data-k="right">▶</button></div>
+<div id="top" class="ui">
+ <select id="city"><option value="city1_h">Город 1</option><option value="city2_s">Город 2</option></select>
+ <button id="zm" title="Отдалить">−</button><button id="zp" title="Приблизить">+</button><button id="fs" title="На весь экран">⛶</button>
+ <a href="viewer.html">спрайты</a>
+</div>
+<div id="btns" class="ui"><button data-k="fire">🔫</button><button id="qbtn">Q</button><button id="ebtn">E</button></div>
 <div id="info"></div>
-<small>Стрелки/WASD — идти, Shift — бежать, E — сесть/выйти из машины, Пробел — огонь, Q — сменить оружие, F — отладка. Запуск: <code>python3 -m http.server</code></small>
 <script type="module" src="js/game.js"></script>
 </body></html>
