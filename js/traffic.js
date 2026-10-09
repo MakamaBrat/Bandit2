@@ -1,6 +1,6 @@
 // Traffic: AI cars drive along roads (collision 0) in cardinal directions. Pure logic.
-import { stepCar, carBlocked, fwd, newCar, CAR_SPRITES } from './vehicle.js';
-const CRUISE = 70, LOOK = 30;
+import { stepCar, carBlocked, fwd, newCar, CAR_SPRITES, HL, HW } from './vehicle.js';
+const CRUISE = 70, LOOK = HL + 14;
 const HEADS = [0, 90, 180, 270];
 const roadAhead = (map, x, y, h, d) => { const [fx, fy] = fwd(h); return !carBlocked(map, x + fx * d, y + fy * d, h) && map.tileAt(x + fx * d, y + fy * d).collision === 0; };
 const angDiff = (a, b) => ((b - a + 540) % 360) - 180;
@@ -21,7 +21,7 @@ export function stepTraffic(map, c, obstacles, dt, rnd = Math.random) {
   }
   const [fx, fy] = fwd(c.heading);
   const blocked = !(c.ignore > 0) && obstacles.some(o => { if (o === c) return false; if (o.heading === undefined && map.tileAt(o.x, o.y).collision !== 0) return false;   // people on the pavement do not stop traffic
-    const dx = o.x - c.x, dy = o.y - c.y, f = dx * fx + dy * fy, s = Math.abs(dx * fy - dy * fx); return f > 0 && f < 34 && s < 12; });
+    const dx = o.x - c.x, dy = o.y - c.y, f = dx * fx + dy * fy, s = Math.abs(dx * fy - dy * fx); return f > 0 && f < HL + 30 && s < HW + 6; });
   c.blockT = blocked ? (c.blockT || 0) + dt : 0;                       // head-on deadlock: back off and turn round
   if (c.blockT > 2) { c.want = (c.want + 180) % 360; c.blockT = 0; c.ignore = 1.5; }
   if (c.ignore > 0) c.ignore -= dt;
@@ -44,7 +44,7 @@ export function spawnTraffic(map, around, n = 8, rnd = Math.random) {
   const T = map.data.tileSize, out = [], R = 30;
   for (let tries = 0; tries < 6000 && out.length < n; tries++) {
     const x = Math.floor((around.x + (rnd() * 2 - 1) * R * T) / T) * T + T / 2, y = Math.floor((around.y + (rnd() * 2 - 1) * R * T) / T) * T + T / 2;
-    if (Math.hypot(x - around.x, y - around.y) < 140 || out.some(o => Math.hypot(o.x - x, o.y - y) < 60)) continue;
+    if (Math.hypot(x - around.x, y - around.y) < 140 || out.some(o => Math.hypot(o.x - x, o.y - y) < 90)) continue;
     const h = HEADS.find(h => roadAhead(map, x, y, h, 40) && !carBlocked(map, x, y, h) && map.tileAt(x, y).collision === 0);
     if (h === undefined) continue;
     out.push(newTrafficCar(CAR_SPRITES[out.length % CAR_SPRITES.length], x, y, h));
@@ -60,7 +60,7 @@ export function topUpTraffic(map, around, cars, n = 8, rnd = Math.random, minR =
   for (let tries = 0; tries < 40 && count < n; tries++) {
     const a = rnd() * Math.PI * 2, r = minR + rnd() * (maxR - minR);
     const x = Math.floor((around.x + Math.cos(a) * r) / T) * T + T / 2, y = Math.floor((around.y + Math.sin(a) * r) / T) * T + T / 2;
-    if (x < 0 || y < 0 || x > map.w || y > map.h || cars.some(o => Math.hypot(o.x - x, o.y - y) < 60)) continue;
+    if (x < 0 || y < 0 || x > map.w || y > map.h || cars.some(o => Math.hypot(o.x - x, o.y - y) < 90)) continue;
     const h = HEADS.find(h => roadAhead(map, x, y, h, 40) && !carBlocked(map, x, y, h) && map.tileAt(x, y).collision === 0);
     if (h === undefined) continue;
     cars.push(newTrafficCar(CAR_SPRITES[Math.floor(rnd() * CAR_SPRITES.length)], x, y, h)); count++;

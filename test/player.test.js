@@ -16,5 +16,9 @@ for (const tag of ['city1_h', 'city2_s']) {
   ok(bad === 0, `${tag}: never entered a solid tile in 20000 random steps (moved ${moved})`);
   ok(p.x >= 0 && p.y >= 0 && p.x < map.w && p.y < map.h, `${tag}: stayed inside the map`);
 }
-const q = { dir: DIR.RIGHT, moving: true, running: true }; ok(animIndex(q) === 62, 'anim index run-right = 62');
+const q = { dir: DIR.RIGHT, moving: true, running: true }; ok(animIndex(q) === DIR.RIGHT + 2, 'anim index run-right = right group + 2');
+{ // facing: in i_00 the group that is NOT mirrored for walking faces right (its aim poses point right); the mirrored one faces left
+  const an = JSON.parse(readFileSync('assets/sprites/i_00/sprite.json')).animations, flip = a => an[a][0].flip & 1;
+  ok(flip(DIR.RIGHT + 1) === 0 && flip(DIR.LEFT + 1) === 1, 'walking right uses the unmirrored group, walking left the mirrored one');
+  ok(flip(DIR.RIGHT + 3) === 1 && flip(DIR.LEFT + 3) === 0, 'aim poses are stored the other way round (right group = mirrored aim pose)'); }
 process.exit(fail ? 1 : 0);

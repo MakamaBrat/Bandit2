@@ -1,7 +1,7 @@
 // Collisions between entities (pure logic). Car box is HL x HW around the car centre; car angle h: forward = (cos h, -sin h).
-import { fwd, side, carBlocked } from './vehicle.js';
+import { fwd, side, carBlocked, HL, HW } from './vehicle.js';
 import { blockedAt } from './player.js';
-const HL = 15, HW = 7, HIT_SPEED = 35;
+const HIT_SPEED = 35;
 const local = (c, o) => { const [fx, fy] = fwd(c.heading), [sx, sy] = side(c.heading), dx = o.x - c.x, dy = o.y - c.y; return { f: dx * fx + dy * fy, s: dx * sx + dy * sy }; };
 
 // A moving car knocks over pedestrians (and the hero on foot). Returns the list of things hit.
@@ -23,15 +23,32 @@ export function carHits(map, c, peds, hero) {
   return hit;
 }
 
-// Two cars overlapping: push apart along the line between centres and swap part of their speed.
+// Each car is two circles (front and rear); the closest pair decides the overlap.
+const circles = c => { const [fx, fy] = fwd(c.heading), o = HL - HW; return [[c.x + fx * o, c.y + fy * o], [c.x - fx * o, c.y - fy * o]]; };
 export function carVsCar(map, a, b) {
-  const dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy) || 0.001, min = 24;
+  if (Math.hypot(a.x - b.x, a.y - b.y) > 2 * HL + 4) return false;
+  let best = null;
+  for (const [ax, ay] of circles(a)) for (const [bx, by] of circles(b)) { const d = Math.hypot(bx - ax, by - ay); if (!best || d < best.d) best = { d, dx: bx - ax, dy: by - ay }; }
+  const min = 2 * HW, d = best.d || 0.001;
   if (d >= min) return false;
-  const nx = dx / d, ny = dy / d, push = (min - d) / 2;
+  const nx = best.dx / d, ny = best.dy / d, push = (min - d) / 2;
   for (const [c, sg] of [[a, -1], [b, 1]]) {
     const x = c.x + nx * push * sg, y = c.y + ny * push * sg;
     if (!carBlocked(map, x, y, c.heading)) { c.x = x; c.y = y; }
   }
   const sa = a.speed, sb = b.speed; a.speed = sb * 0.5 + sa * 0.2; b.speed = sa * 0.5 + sb * 0.2;
   return true;
+}
+
+// The hero on foot cannot walk through a car body. Returns true when (x, y) is inside some car's rectangle (with a small margin).
+export const insideCar = (cars, x, y, skip) => cars.some(c => c !== skip && carDistRaw(c, x, y) < 3);
+function carDistRaw(c, x, y) { const [fx, fy] = fwd(c.heading), [sx, sy] = side(c.heading), dx = x - c.x, dy = y - c.y; return Math.hypot(Math.max(0, Math.abs(dx * fx + dy * fy) - HL), Math.max(0, Math.abs(dx * sx + dy * sy) - HW)); }
+// Undo the part of a move that ended inside a car (slides along the body); moving out of a car is always allowed.
+export function keepOutOfCars(cars, p, px, py) {
+  if (!insideCar(cars, p.x, p.y)) return;
+  if (insideCar(cars, px, py)) return;                       // was already inside: let the hero walk out
+  const nx = p.x, ny = p.y;
+  if (!insideCar(cars, nx, py)) { p.y = py; return; }
+  if (!insideCar(cars, px, ny)) { p.x = px; return; }
+  p.x = px; p.y = py;
 }

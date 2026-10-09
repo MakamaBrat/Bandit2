@@ -1,6 +1,6 @@
 // Police and wanted level (pure logic). i_00 police anims, 11 per direction: +0 idle, +1 walk, +2 run, +3 aim, +4 shoot, +9 hit, +10 lying.
 import { DIR, blockedAt } from './player.js';
-const BASE = { [DIR.LEFT]: 164, [DIR.UP]: 175, [DIR.RIGHT]: 186, [DIR.DOWN]: 197 };
+const BASE = { [DIR.RIGHT]: 164, [DIR.UP]: 175, [DIR.LEFT]: 186, [DIR.DOWN]: 197 };
 export const COP_SPEED = 62, COP_HP = 3, COP_DMG = 8;
 const solid = (map, x, y) => map.tileAt(x, y).collision === 2;
 const canStand = (map, x, y) => !blockedAt(map, x, y);

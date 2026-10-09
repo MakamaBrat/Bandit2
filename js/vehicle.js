@@ -2,7 +2,7 @@
 // Screen coords: y grows down, so forward = (cos h, -sin h).
 import { blockedAt } from './player.js';
 export const CAR_SPRITES = ['k_00', 'k_01', 'k_02', 'k_03', 'k_04'];
-const HL = 15, HW = 7;                      // half length / half width of the collision box (px)
+export const HL = 30, HW = 12;               // half length / half width of the collision box (px); the car art is ~72 x 33
 const ACCEL = 170, BRAKE = 320, DRAG = 55, MAXF = 150, MAXR = -50, TURN = 120;
 const rad = d => d * Math.PI / 180;
 export const fwd = h => [Math.cos(rad(h)), -Math.sin(rad(h))];
@@ -10,7 +10,7 @@ export const side = h => [Math.sin(rad(h)), Math.cos(rad(h))];
 
 export function samples(x, y, h) {
   const [fx, fy] = fwd(h), [sx, sy] = side(h), pts = [];
-  for (const l of [-HL, 0, HL]) for (const w of [-HW, 0, HW]) if (l || w) pts.push([x + fx * l + sx * w, y + fy * l + sy * w]);
+  for (const l of [-HL, -HL / 2, 0, HL / 2, HL]) for (const w of [-HW, 0, HW]) if (l || w) pts.push([x + fx * l + sx * w, y + fy * l + sy * w]);
   return pts;
 }
 export const carBlocked = (map, x, y, h) => samples(x, y, h).some(([px, py]) => map.tileAt(px, py).collision === 2);
@@ -47,15 +47,21 @@ export function spawnCars(map, around, n = 5) {
       for (let dx = -r; dx <= r && cars.length < n; dx++) {
         if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
         const x = Math.floor(around.x / T + dx) * T + T / 2, y = Math.floor(around.y / T + dy) * T + T / 2;
-        if (!roadClear(x, y) || cars.some(c => Math.hypot(c.x - x, c.y - y) < 90)) continue;
+        if (!roadClear(x, y) || cars.some(c => Math.hypot(c.x - x, c.y - y) < 110)) continue;
         cars.push(newCar(CAR_SPRITES[cars.length % CAR_SPRITES.length], x, y, [0, 90, 180, 270][(cars.length * 3) % 4]));
       }
   return cars;
 }
 
-export function nearestCar(cars, p, maxDist = 34) {
+// distance from a point to the car's body rectangle (0 when inside)
+export function carDist(c, x, y) {
+  const [fx, fy] = fwd(c.heading), [sx, sy] = side(c.heading), dx = x - c.x, dy = y - c.y;
+  const f = Math.abs(dx * fx + dy * fy) - HL, s = Math.abs(dx * sx + dy * sy) - HW;
+  return Math.hypot(Math.max(0, f), Math.max(0, s));
+}
+export function nearestCar(cars, p, maxDist = 14) {
   let best = null, bd = maxDist;
-  for (const c of cars) { const d = Math.hypot(c.x - p.x, c.y - p.y); if (d < bd) { bd = d; best = c; } }
+  for (const c of cars) { const d = carDist(c, p.x, p.y); if (d < bd) { bd = d; best = c; } }
   return best;
 }
 
@@ -68,7 +74,7 @@ export function exitSpot(map, c) {
       if (!blockedAt(map, x, y)) return { x, y };
     }
   // fallback: any free spot on rings around the car (car jammed against walls / in a corner)
-  for (let r = 14; r <= 48; r += 6)
+  for (let r = HW + 10; r <= HL + 40; r += 6)
     for (let a = 0; a < 360; a += 30) {
       const x = c.x + Math.cos(a * Math.PI / 180) * r, y = c.y + Math.sin(a * Math.PI / 180) * r;
       if (!blockedAt(map, x, y)) return { x, y };

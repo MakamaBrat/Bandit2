@@ -1,6 +1,7 @@
 // Weapons and bullets (pure logic). i_00 hero pose layout inside each 30-anim direction group:
 // weapon k (0 pistol, 1 shotgun, 2 assault rifle): hold = 3 + 2k, fire = hold + 1 (aiming straight in the facing direction).
 import { DIR } from './player.js';
+import { HL, HW } from './vehicle.js';
 export const WEAPONS = [
   { name: 'Пистолет', cd: 0.30, speed: 300, range: 220, pellets: 1, spread: 0 },
   { name: 'Дробовик', cd: 0.80, speed: 280, range: 140, pellets: 5, spread: 0.25 },
@@ -24,7 +25,7 @@ export function fire(p, rnd = Math.random) {
 }
 export const armAnim = p => (p.weapon < 0 || p.weapon == null || p.moving || p.down > 0 || p.since > 0.7) ? null : p.dir + 3 + 2 * p.weapon + (p.since < 0.1 ? 1 : 0);
 
-const inCar = (c, x, y) => { const h = c.heading * Math.PI / 180, dx = x - c.x, dy = y - c.y, f = dx * Math.cos(h) - dy * Math.sin(h), s = dx * Math.sin(h) + dy * Math.cos(h); return Math.abs(f) < 15 && Math.abs(s) < 7; };
+const inCar = (c, x, y) => { const h = c.heading * Math.PI / 180, dx = x - c.x, dy = y - c.y, f = dx * Math.cos(h) - dy * Math.sin(h), s = dx * Math.sin(h) + dy * Math.cos(h); return Math.abs(f) < HL && Math.abs(s) < HW; };
 
 // Moves bullets (array is filtered in place), returns the pedestrians that were shot.
 // ctx (optional): { cops, hero, driving, onHit(kind, target) } - hero bullets hurt cops, cop bullets hurt the hero (or the car the hero drives).

@@ -1,9 +1,9 @@
 import { loadMap, loadSprite, drawMap, drawFrame, animAt } from './engine.js';
 import { newPlayer, step, animIndex } from './player.js';
-import { spawnCars, stepCar, nearestCar, exitSpot, CAR_SPRITES } from './vehicle.js';
+import { spawnCars, stepCar, nearestCar, exitSpot, carDist, side, CAR_SPRITES } from './vehicle.js';
 import { spawnPeds, stepPed, pedAnim, topUpPeds } from './ped.js';
 import { spawnTraffic, stepTraffic, topUpTraffic } from './traffic.js';
-import { carHits, carVsCar } from './collide.js';
+import { carHits, carVsCar, keepOutOfCars } from './collide.js';
 import { newCop, stepCop, copAnim, newWanted, addHeat, stars, stepWanted, manageCops, hurtHero, reviveHero, HERO_HP } from './police.js';
 import { findSpawn } from './player.js';
 import { WEAPONS, arm, nextWeapon, stepArm, fire, armAnim, stepBullets, scare } from './weapons.js';
@@ -29,7 +29,7 @@ cv.addEventListener('pointerdown', e => {
   if (ptrs.size > 2 || p.dead) return;
   const w = world({ x: e.clientX, y: e.clientY });
   if (!drive) {
-    let best = null, bd = 26; for (const c of cars) { const d = Math.max(Math.abs(w.x - c.x), Math.abs(w.y - c.y)); if (d < bd) { bd = d; best = c; } }
+    let best = null, bd = 6; for (const c of cars) { const d = carDist(c, w.x, w.y); if (d < bd) { bd = d; best = c; } }
     if (best) { auto = { car: best, t: 0, lx: p.x, ly: p.y, still: 0, axis: null }; aim = null; return; }
   }
   auto = null; aim = { x: e.clientX, y: e.clientY };
@@ -43,7 +43,7 @@ cv.addEventListener('pointerup', pend); cv.addEventListener('pointercancel', pen
 cv.addEventListener('wheel', e => { e.preventDefault(); setZoom(zoom * (e.deltaY < 0 ? 1.15 : 1 / 1.15)); }, { passive: false });
 const pointerInput = () => {
   const i = {}; if (!aim) return i; const w = world(aim);
-  if (drive) { const dx = w.x - drive.x, dy = w.y - drive.y; if (dy > 22) i.down = true; else i.up = true; if (dx < -14) i.left = true; else if (dx > 14) i.right = true; return i; }
+  if (drive) { const [sx, sy] = side(drive.heading), r = (w.x - drive.x) * sx + (w.y - drive.y) * sy; if (r > 10) i.right = true; else if (r < -10) i.left = true; return i; }   // touch right/left of the car's body = steer that way; gas and brake are separate buttons
   const dx = w.x - p.x, dy = w.y - (p.y - 12); i.run = true;
   if (Math.hypot(dx, dy) < 8) return {};
   if (Math.abs(dx) > Math.abs(dy)) i[dx < 0 ? 'left' : 'right'] = true; else i[dy < 0 ? 'up' : 'down'] = true;
@@ -52,7 +52,7 @@ const pointerInput = () => {
 // walk to the tapped car and get in
 const autoInput = dt => {
   if (!auto || drive) return {}; const c = auto.car, dx = c.x - p.x, dy = c.y - p.y; auto.t += dt;
-  if (Math.hypot(dx, dy) <= 30) { drive = c; c.ai = false; auto = null; return {}; }
+  if (carDist(c, p.x, p.y) <= 10) { drive = c; c.ai = false; auto = null; return {}; }
   if (auto.t > 8) { auto = null; return {}; }
   auto.still = Math.hypot(p.x - auto.lx, p.y - auto.ly) < 0.3 ? auto.still + dt : 0; auto.lx = p.x; auto.ly = p.y;
   if (auto.axis === null) auto.axis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';
@@ -68,20 +68,23 @@ function toggleCar() {
 async function start(tag) { map = await loadMap(tag); p = arm(newPlayer(map)); p.hp = HERO_HP; bullets = []; cops = []; wanted = newWanted(); wastedT = -1; drive = null; cars = [...spawnCars(map, p, 5), ...spawnTraffic(map, p, 6)]; topUpTraffic(map, p, cars, 8, Math.random, 60, 260); peds = spawnPeds(map, p, 14); }
 $('city').onchange = e => start(e.target.value);
 // touch / on-screen buttons
-document.querySelectorAll('[data-k]').forEach(b => { const k = b.dataset.k; b.onpointerdown = () => keys[k] = true; b.onpointerup = b.onpointerleave = () => keys[k] = false; });
+document.querySelectorAll('[data-k]').forEach(b => { const k = b.dataset.k; b.onpointerdown = () => keys[k] = true; b.onpointerup = b.onpointerleave = b.onpointercancel = () => keys[k] = false; });
 
 $('ebtn').onpointerdown = toggleCar;
 $('zp').onclick = () => setZoom(zoom * 1.25); $('zm').onclick = () => setZoom(zoom / 1.25);
 $('fs').onclick = () => { const el = document.documentElement; try { if (document.fullscreenElement || document.webkitFullscreenElement) (document.exitFullscreen || document.webkitExitFullscreen).call(document); else (el.requestFullscreen || el.webkitRequestFullscreen).call(el); } catch (e) {} };
 $('city').onfocus = () => { for (const k in keys) keys[k] = false; };
 $('qbtn').onpointerdown = () => { if (!drive) nextWeapon(p); };
-globalThis.__dbg = () => ({ get drive() { return drive; }, cars, peds, cops, p, cam, zoom, VW, VH });
+globalThis.__dbg = () => ({ get drive() { return drive; }, cars, peds, cops, p, cam, zoom, VW, VH, map });
 let last = performance.now();
 function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
   let inp = p.dead ? {} : input();
-  if (!p.dead && !Object.keys(inp).some(k => k !== 'run' && inp[k])) { const pi = pointerInput(); inp = Object.keys(pi).length ? pi : autoInput(dt); } else auto = null;
-  if (drive) stepCar(map, drive, inp, dt); else step(map, p, inp, dt);
+  document.body.classList.toggle('driving', !!drive);
+  if (drive && !p.dead) { const pi = pointerInput(); if (!inp.left && !inp.right) { if (pi.left) inp.left = true; if (pi.right) inp.right = true; } auto = null; }
+  else if (!p.dead && !Object.keys(inp).some(k => k !== 'run' && inp[k])) { const pi = pointerInput(); inp = Object.keys(pi).length ? pi : autoInput(dt); } else auto = null;
+  const px0 = p.x, py0 = p.y;
+  if (drive) stepCar(map, drive, inp, dt); else { step(map, p, inp, dt); keepOutOfCars(cars, p, px0, py0); }
   const tx = (drive || p).x, ty = (drive || p).y;
   if (p.dead) { wastedT += dt; if (wastedT > 2.5) { const s = findSpawn(map); reviveHero(p, s.x, s.y); cops = []; wanted = newWanted(); wastedT = -1; } }
   const obst = [p, ...peds, ...cars];
@@ -119,7 +122,7 @@ function frame(now) {
   if (p.dead) { ctx.fillStyle = 'rgba(0,0,0,.45)'; ctx.fillRect(0, 0, VW, VH); ctx.fillStyle = '#e33'; ctx.font = 'bold 20px monospace'; ctx.fillText('WASTED', VW / 2 - 40, VH / 2); ctx.font = '8px monospace'; }
   const near = !drive && nearestCar(cars, p);
   if (!drive) { ctx.fillStyle = '#fff'; ctx.fillText(WEAPONS[p.weapon].name + ' (Q)', 4, 10); }
-  hint = drive ? 'E — выйти · ↑ газ · ↓ тормоз/назад · ←→ руль' : near ? 'E — сесть в машину' : 'Пробел — огонь · Q — оружие';
+  hint = drive ? 'E — выйти · ↑ газ · ↓ тормоз/назад · ←→ руль (или касание сбоку от машины)' : near ? 'E — сесть в машину' : 'Пробел — огонь · Q — оружие';
   ctx.fillStyle = '#fff'; ctx.font = '8px monospace'; ctx.fillText(hint, 4, VH - 6);
   if (drive) ctx.fillText(Math.round(Math.abs(drive.speed)) + ' km/h', 4, 10);
   if (debug) {

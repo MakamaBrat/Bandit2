@@ -1,6 +1,6 @@
 // Pure game logic (no DOM): player on foot with tile collision. Units: pixels, seconds.
 // Collision values per tile (from collision table, verified visually): 0 road, 1 sidewalk, 2 solid, 3 door/special.
-export const DIR = { LEFT: 0, UP: 30, RIGHT: 60, DOWN: 90 }; // first animation index of each direction group in i_00
+export const DIR = { RIGHT: 0, UP: 30, LEFT: 60, DOWN: 90 }; // first animation index of each direction group in i_00 (group 0 faces right: its aim poses point right, 60 is the mirror)
 export const ANIM = { IDLE: 0, WALK: 1, RUN: 2 };           // offsets inside a group
 export const WALK_SPEED = 55, RUN_SPEED = 100;
 const HALF_W = 5, HALF_H = 3;                                 // foot hitbox half-size around the anchor

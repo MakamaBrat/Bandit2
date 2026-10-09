@@ -7,7 +7,8 @@ const els = {}; const el = id => els[id] ||= mk();
 globalThis.window = globalThis; globalThis.innerWidth = 1280; globalThis.innerHeight = 720;
 globalThis.localStorage = { _: {}, getItem(k) { return this._[k] ?? null; }, setItem(k, v) { this._[k] = String(v); } };
 globalThis.addEventListener = (t, f) => (listeners[t] ||= []).push(f);
-globalThis.document = { getElementById: el, querySelectorAll: () => [el('qbtn'), el('ebtn')], documentElement: {}, fullscreenElement: null };
+const cls = new Set(); const pedal = (id, k) => { const b = el(id); b.dataset.k = k; return b; };
+globalThis.document = { getElementById: el, querySelectorAll: () => [pedal('gas', 'up'), pedal('brake', 'down'), pedal('firebtn', 'fire')], documentElement: {}, fullscreenElement: null, body: { classList: { toggle: (c, on) => on ? cls.add(c) : cls.delete(c), has: c => cls.has(c) } } };
 globalThis.performance ||= { now: () => Date.now() };
 let raf; globalThis.requestAnimationFrame = f => { raf = f; };
 const img = { width: 6144, height: 3840 };
@@ -38,6 +39,9 @@ L.pointerdown({ pointerId: 1, clientX: cx, clientY: cy }); L.pointerdown({ point
 
 // ---- tap a car: hero walks to it and gets in ----
 const D = globalThis.__dbg;
+const openRoad = (c, heading) => { const m = D().map, T = 24; for (let r = 0; r < 80; r++) for (let a = 0; a < 360; a += 15) { const x = Math.floor((c.x + Math.cos(a * Math.PI / 180) * r * T) / T) * T + 12, y = Math.floor((c.y + Math.sin(a * Math.PI / 180) * r * T) / T) * T + 12;
+    let clear = true; for (let dx = -3; dx <= 3 && clear; dx++) for (let dy = -3; dy <= 3; dy++) if (m.tileAt(x + dx * T, y + dy * T).collision !== 0) { clear = false; break; }
+    if (clear) { c.x = x; c.y = y; if (c.speed !== undefined) c.speed = 0; if (heading !== undefined) c.heading = heading; return true; } } return false; };
 const toScreen = o => ({ x: (o.x - D().cam.x) * D().zoom, y: (o.y - D().cam.y) * D().zoom });
 {
   const d = D(), car = d.cars.find(c => !c.ai); d.p.x = car.x - 70; d.p.y = car.y; d.cars.forEach(c => { if (c !== car) c.ai = false; });
@@ -45,15 +49,28 @@ const toScreen = o => ({ x: (o.x - D().cam.x) * D().zoom, y: (o.y - D().cam.y) *
   L.pointerdown({ pointerId: 1, clientX: s.x, clientY: s.y }); L.pointerup({ pointerId: 1 });
   let sat = false; for (let i = 0; i < 240 && !sat; i++) { tick(1); sat = D().drive === car; }
   t(sat, 'tapping a car makes the hero walk to it and get in');
-  // drive by holding right of the car: gas + steer, then exit with E
-  const x0 = car.x, y0 = car.y; const s2 = toScreen(car);
-  L.pointerdown({ pointerId: 1, clientX: s2.x + 120, clientY: s2.y }); tick(60); L.pointerup({ pointerId: 1 });
-  t(Math.hypot(car.x - x0, car.y - y0) > 20, `holding on the screen drives the car (${Math.round(Math.hypot(car.x - x0, car.y - y0))}px)`);
+  tick(1); t(cls.has('driving'), 'pedal buttons are shown while in a car (body.driving)');
+  t(openRoad(car, 0), 'found an open stretch of road for the driving checks'); tick(2);
+  // touching beside the car without a pedal does not move it
+  const x0 = car.x, y0 = car.y, h0 = car.heading, rel = (k) => { const sd = [Math.sin(car.heading * Math.PI / 180), Math.cos(car.heading * Math.PI / 180)]; return toScreen({ x: car.x + sd[0] * k, y: car.y + sd[1] * k }); };
+  { const s2 = rel(60); L.pointerdown({ pointerId: 1, clientX: s2.x, clientY: s2.y }); tick(40); L.pointerup({ pointerId: 1 }); }
+  t(Math.hypot(car.x - x0, car.y - y0) < 5, 'touching the screen alone does not drive the car (gas is a separate button)');
+  // gas pedal + touch on the car's right side: drives and turns clockwise (heading decreases)
+  const ad = (a, b) => ((b - a + 540) % 360) - 180;
+  el('gas').onpointerdown(); { const s2 = rel(60); L.pointerdown({ pointerId: 1, clientX: s2.x, clientY: s2.y }); } tick(45); 
+  const h1 = car.heading; L.pointerup({ pointerId: 1 }); el('gas').onpointerup();
+  t(Math.hypot(car.x - x0, car.y - y0) > 20, `gas button drives the car (${Math.round(Math.hypot(car.x - x0, car.y - y0))}px)`);
+  t(ad(h0, h1) < -5, `touch on the car's right side steers right (heading ${Math.round(h0)} -> ${Math.round(h1)})`);
+  // left side steers the other way (steering is relative to the car's own orientation, whatever way it points)
+  { openRoad(car, 90); tick(2); const h2 = car.heading; el('gas').onpointerdown(); const s3 = rel(-60); L.pointerdown({ pointerId: 1, clientX: s3.x, clientY: s3.y }); tick(45); const h3 = car.heading; L.pointerup({ pointerId: 1 }); el('gas').onpointerup();
+    t(ad(h2, h3) > 5, `touch on the car's left side steers left (heading ${Math.round(h2)} -> ${Math.round(h3)})`); }
+  // brake pedal slows / reverses
+  { openRoad(car, 180); tick(2); el('gas').onpointerdown(); tick(30); el('gas').onpointerup(); const v = car.speed; el('brake').onpointerdown(); tick(40); el('brake').onpointerup(); t(car.speed < v - 10 && car.speed < 0, `brake button slows the car and then reverses (${Math.round(v)} -> ${Math.round(car.speed)})`); }
 }
 // ---- hold left of the hero on foot: moves left ----
 {
-  const d = D(); if (d.drive) el('ebtn').onpointerdown(); tick(30);
-  d.cars.forEach(c => { c.x = 20; c.y = 20; c.speed = 0; c.ai = false; }); tick(2);   // no car next to the hero, so taps mean 'run', not 'get in'
+  const d = D(); if (d.drive) el('ebtn').onpointerdown(); tick(30); t(!cls.has('driving'), 'pedal buttons are hidden on foot');
+  d.cars.forEach(c => { c.x = 20; c.y = 20; c.speed = 0; c.ai = false; }); openRoad(D().p); tick(3);   // no car next to the hero, so taps mean 'run', not 'get in'
   const x0 = D().p.x, sp = toScreen(D().p); L.pointerdown({ pointerId: 1, clientX: sp.x - 150, clientY: sp.y - 12 }); tick(30); L.pointerup({ pointerId: 1 });
   t(D().p.x < x0 - 5, `touch to the left of the hero runs left (${Math.round(D().p.x - x0)}px)`);
   const y1 = D().p.y, sp2 = toScreen(D().p); L.pointerdown({ pointerId: 1, clientX: sp2.x, clientY: sp2.y + 150 }); tick(30); L.pointerup({ pointerId: 1 });

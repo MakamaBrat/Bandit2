@@ -36,7 +36,7 @@ export function stepPed(map, p, dt, rnd = Math.random) {
   return p;
 }
 // i_00 holds men (groups of 30 per direction, lying = +27) and women (208.., groups of 5: idle, walk, run, run, lying)
-const WOMAN = { [DIR.LEFT]: 208, [DIR.UP]: 213, [DIR.RIGHT]: 218, [DIR.DOWN]: 223 };
+const WOMAN = { [DIR.RIGHT]: 208, [DIR.UP]: 213, [DIR.LEFT]: 218, [DIR.DOWN]: 223 };
 export const pedAnim = p => p.kind === 'woman'
   ? WOMAN[p.dir] + (p.down > 0 || p.dead ? 4 : p.moving ? (p.flee > 0 ? ANIM.RUN : ANIM.WALK) : ANIM.IDLE)
   : p.dir + (p.down > 0 || p.dead ? 27 : p.moving ? (p.flee > 0 ? ANIM.RUN : ANIM.WALK) : ANIM.IDLE);
