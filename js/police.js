@@ -8,11 +8,14 @@ const canStand = (map, x, y) => !blockedAt(map, x, y);
 export const newCop = (x, y) => ({ x, y, dir: DIR.DOWN, hp: COP_HP, dead: false, deadT: 0, cool: 1 + Math.random(), since: 99, moving: false, t: Math.random() * 5, far: false });
 export function copAnim(c) {
   const b = BASE[c.dir];
-  if (c.dead) return b + 10;
-  if (c.since < 0.1) return b + 4;
-  if (c.since < 0.6) return b + 3;
-  return b + (c.moving ? (c.far ? 2 : 1) : 0);
+  if (c.dead || c.down > 0) return b + 10;               // lying (knocked down by a car or dead)
+  if (c.since < 0.1) return b + 4;                       // muzzle flash right after a shot
+  if (c.moving) return b + (c.far ? 2 : 1);              // walking / running always wins over the aim pose
+  if (c.aiming) return b + 3;
+  return b;
 }
+// time base for the animation: shot / aim poses count from the last shot, everything else from the cop's own clock
+export const copAnimTime = c => (c.since < 0.1 || (c.aiming && !c.moving)) ? c.since : c.t;
 
 // clear line of sight: no solid tile between the two points
 export function sees(map, ax, ay, bx, by) {
@@ -21,32 +24,45 @@ export function sees(map, ax, ay, bx, by) {
   return true;
 }
 
-// Advances a cop by one 100 ms tick. Like the original (b.N, mode 6) he runs at the target (75 px/s) while farther than ~98 px, stops within ~73 px
-// and shoots straight at the target in any direction (no lining up on an axis); returns a new bullet or null.
-import { stepFlight } from './ped.js';
+// Cop on foot: runs at the target while it is far, slows down when close, stops at ~73 px and shoots straight at the target in any direction.
+// Everything has hysteresis (stand-and-shoot starts at 73 px and ends at 92 px, run/walk switch at 98/75 px, facing changes only when the other
+// axis clearly dominates, the walking flag is debounced, detours are held) so he never flickers. Returns a new bullet or null.
+export const STOP_DIST = 73, LEAVE_DIST = 92, RUN_SPEED = 85, WALK_SPEED = 40;
 export function stepCop(map, c, tx, ty, dt, rnd = Math.random) {
   c.t += dt;
-  if (c.flying) { stepFlight(map, c); if (c.dead) c.deadT += dt; c.moving = false; return null; }
-  if (c.dead) { c.deadT += dt; c.moving = false; return null; }
-  c.cool -= dt; c.since += dt;
-  const dx = tx - c.x, dy = ty - c.y, dist = Math.hypot(dx, dy) || 1;
-  c.moving = false; c.far = dist > 98;
-  const face = () => { c.dir = Math.abs(dx) > Math.abs(dy) ? (dx < 0 ? DIR.LEFT : DIR.RIGHT) : (dy < 0 ? DIR.UP : DIR.DOWN); };
-  if (dist <= 73 && sees(map, c.x, c.y, tx, ty)) {
-    face();
+  if (c.dead) { c.deadT += dt; c.moving = false; c.aiming = false; return null; }
+  if (c.down > 0) { c.down -= dt; c.moving = false; c.aiming = false; c.since += dt; c.cool = Math.max(c.cool, 0.6); return null; }   // knocked down: gets up after a moment
+  c.cool -= dt; c.since += dt; c.moveHold = Math.max(0, (c.moveHold || 0) - dt);
+  const dx = tx - c.x, dy = ty - c.y, dist = Math.hypot(dx, dy) || 1, ux = dx / dist, uy = dy / dist;
+  c.losT = sees(map, c.x, c.y, tx, ty) ? 0.4 : Math.max(0, (c.losT || 0) - dt);
+  c.stand = c.stand ? (dist <= LEAVE_DIST && c.losT > 0) : (dist <= STOP_DIST && c.losT > 0);
+  c.far = c.far ? dist > 75 : dist > 98;
+  const face = () => {                                  // dominant axis wins only when it clearly dominates
+    const ax = Math.abs(dx), ay = Math.abs(dy), horiz = c.dir === DIR.LEFT || c.dir === DIR.RIGHT;
+    const toH = horiz ? !(ay > ax * 1.35) : ax > ay * 1.35;
+    c.dir = toH ? (dx < 0 ? DIR.LEFT : DIR.RIGHT) : (dy < 0 ? DIR.UP : DIR.DOWN);
+  };
+  if (c.stand) {
+    face(); c.aiming = true; c.moving = c.moveHold > 0;
     if (c.cool <= 0) {
       c.cool = 0.9 + rnd() * 0.6; c.since = 0;
       const a = Math.atan2(dy, dx) + (rnd() - 0.5) * 0.16;
-      return { x: c.x + dx / dist * 8, y: c.y + dy / dist * 8, vx: Math.cos(a) * 260, vy: Math.sin(a) * 260, left: 230, owner: 'cop' };
+      return { x: c.x + ux * 8, y: c.y + uy * 8, vx: Math.cos(a) * 260, vy: Math.sin(a) * 260, left: 230, owner: 'cop' };
     }
     return null;
   }
-  const v = (dist > 98 ? 75 : 30) * dt, ux = dx / dist, uy = dy / dist;
-  const tryMove = (ax, ay) => { if (!(ax || ay)) return false; if (canStand(map, c.x + ax * v, c.y + ay * v)) { c.x += ax * v; c.y += ay * v; c.dir = Math.abs(ax) > Math.abs(ay) ? (ax < 0 ? DIR.LEFT : DIR.RIGHT) : (ay < 0 ? DIR.UP : DIR.DOWN); return true; } return false; };
-  if (c.detour > 0) { c.detour -= dt; if (tryMove(c.dx, c.dy)) { c.moving = true; return null; } c.detour = 0; }
-  c.moving = tryMove(ux, uy) || tryMove(Math.sign(ux), 0) || tryMove(0, Math.sign(uy));
-  c.stuckT = c.moving ? 0 : (c.stuckT || 0) + dt;
-  if (c.stuckT > 0.3) { const d = [[1, 0], [-1, 0], [0, 1], [0, -1]][Math.floor(rnd() * 4)]; c.dx = d[0]; c.dy = d[1]; c.detour = 0.6 + rnd() * 0.8; c.stuckT = 0; }
+  c.aiming = false;
+  const v = (c.far ? RUN_SPEED : WALK_SPEED) * dt;
+  const tryMove = (mx, my) => { if (!(mx || my) || !canStand(map, c.x + mx * v, c.y + my * v)) return false; c.x += mx * v; c.y += my * v; return true; };
+  let moved = false;
+  if (c.detour > 0) { c.detour -= dt; moved = tryMove(c.dx, c.dy); if (!moved) c.detour = 0; }
+  if (!moved) moved = tryMove(ux, uy) || tryMove(Math.sign(ux), 0) || tryMove(0, Math.sign(uy));
+  if (moved) { c.moveHold = 0.15; c.stuckT = 0; face(); }
+  else {                                                   // blocked by a building: after a moment walk around it (a held detour)
+    c.stuckT = (c.stuckT || 0) + dt;
+    if (c.stuckT > 0.3) { const d = [[1, 0], [-1, 0], [0, 1], [0, -1]][Math.floor(rnd() * 4)]; c.dx = d[0]; c.dy = d[1]; c.detour = 0.7 + rnd() * 0.7; c.stuckT = 0; }
+  }
+  c.moving = c.moveHold > 0;
   return null;
 }
 

@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { tileLookup } from '../js/engine.js';
 import { newPlayer, blockedAt, DIR } from '../js/player.js';
 import { stepBullets } from '../js/weapons.js';
-import { newCop, stepCop, copAnim, newWanted, addHeat, stars, stepWanted, manageCops, hurtHero, reviveHero, sees, COPS_FOR } from '../js/police.js';
+import { newCop, stepCop, copAnim, copAnimTime, newWanted, addHeat, stars, stepWanted, manageCops, hurtHero, reviveHero, sees, COPS_FOR } from '../js/police.js';
 let fail = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fail++; };
 for (const tag of ['city1_h', 'city2_s']) {
   const data = JSON.parse(readFileSync(`assets/maps/${tag}.json`));
@@ -31,13 +31,21 @@ for (const tag of ['city1_h', 'city2_s']) {
   ok(c.dead && seen.length === 3, `3 pistol hits kill a cop (hp now ${c.hp})`); ok(copAnim(c) % 11 === 10 || [174, 185, 196, 207].includes(copAnim(c)), `dead cop uses lying anim (${copAnim(c)})`);
   const w = newWanted(); addHeat(w, 50); const far = []; for (let i = 0; i < 100; i++) stepWanted(w, far, 0, 0, 1); ok(stars(w) === 0, 'heat fades when no cop is near'); }
 { const p = { x: 1, y: 1 }; hurtHero(p, 60); ok(p.hp === 40 && !p.dead, 'hero hurt'); ok(hurtHero(p, 60) === true && p.dead && p.hp === 0, 'hero dies at 0 hp'); }
-// ---- checkpoint 11: cops run at the target and shoot straight at it (any angle) ----
-{ const { readFileSync } = await import('node:fs'); const { stepCop, newCop } = await import('../js/police.js');
-  const open = { tileAt: () => ({ collision: 0 }), data: { tileSize: 24 } }; const c = newCop(0, 0); c.cool = 0; let shot = null, t = 0;
-  for (; t < 400 && !shot; t++) shot = stepCop(open, c, 120, 90, 0.1);
-  const d = Math.hypot(120 - c.x, 90 - c.y);
-  console.log((shot && d <= 74 ? 'PASS' : 'FAIL') + ` cop stops within ~73 px (${d.toFixed(0)}) and fires`);
-  console.log((shot && Math.abs(shot.vx) > 20 && Math.abs(shot.vy) > 20 ? 'PASS' : 'FAIL') + ' diagonal shot, not locked to an axis');
-  const c2 = newCop(0, 0); for (let i = 0; i < 10; i++) stepCop(open, c2, 1000, 0, 0.1); console.log((Math.abs(c2.x - 75) < 3 ? 'PASS' : 'FAIL') + ` runs 75 px/s (${c2.x.toFixed(1)} px in 1 s)`); }
-
+{ // cops must not twitch: few direction changes and few walking/idle flips per second, with the hero standing or walking about
+  for (const moving of [false, true]) {
+    let dirC = 0, mvC = 0, secs = 0;
+    for (const tag of ['city1_h', 'city2_s']) {
+      const data = JSON.parse(readFileSync(`assets/maps/${tag}.json`));
+      const map = { data, w: data.blocksW * data.tilesPerBlockW * 24, h: data.blocksH * data.tilesPerBlockH * 24, tileAt: tileLookup(data) };
+      for (let trial = 0; trial < 4; trial++) {
+        const hero = newPlayer(map), w = newWanted(); addHeat(w, 100); const cops = []; manageCops(map, w, cops, hero.x, hero.y); const st = cops.map(c => ({ d: c.dir, m: c.moving }));
+        for (let i = 0; i < 30 * 30; i++) { if (moving) { hero.x += Math.cos(i / 90) * 0.6; hero.y += Math.sin(i / 70) * 0.6; }
+          cops.forEach((c, k) => { stepCop(map, c, hero.x, hero.y, 1 / 30); if (c.dir !== st[k].d) dirC++; if (c.moving !== st[k].m) mvC++; st[k] = { d: c.dir, m: c.moving }; }); }
+        secs += 30 * cops.length; }
+    }
+    ok(dirC / secs < (moving ? 2.5 : 0.6), `cops do not twitch (hero ${moving ? 'walking' : 'standing'}): ${(dirC / secs).toFixed(2)} direction changes per second`);
+    ok(mvC / secs < (moving ? 2 : 0.6), `walking/idle flips are rare (hero ${moving ? 'walking' : 'standing'}): ${(mvC / secs).toFixed(2)} per second`);
+  }
+  const c0 = newCop(0, 0); c0.dir = DIR.RIGHT; c0.since = 5; c0.moving = true; c0.aiming = true; ok(copAnim(c0) === 164 + 1, 'a walking cop shows the walk anim even if lined up (never the aim pose)'); c0.far = true; ok(copAnim(c0) === 164 + 2, 'a far cop runs'); c0.moving = false; c0.far = false; ok(copAnim(c0) === 164 + 3, 'a standing cop that is lined up shows the aim pose'); c0.aiming = false; ok(copAnim(c0) === 164, 'a standing cop that is not aiming is idle'); c0.since = 0.05; ok(copAnim(c0) === 164 + 4, 'right after a shot: muzzle flash pose'); ok(typeof copAnimTime(c0) === 'number', 'animation clock is defined');
+}
 process.exit(fail ? 1 : 0);

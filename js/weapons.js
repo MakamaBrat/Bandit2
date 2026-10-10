@@ -37,10 +37,10 @@ export function stepBullets(map, bullets, peds, cars, dt, ctx = {}) {
     for (let k = 0; k < n && !dead; k++) {
       b.x += sx; b.y += sy; b.left -= Math.hypot(sx, sy);
       if (b.left <= 0 || map.tileAt(b.x, b.y).collision === 2) { dead = true; break; }
-      if (b.owner !== 'cop') for (const q of peds) if (!q.dead && Math.abs(q.x - b.x) < 6 && Math.abs(q.y - b.y) < 8) { q.dead = true; q.deadT = 0; q.down = 30; hits.push(q); dead = true; break; }
-      if (!dead && b.owner === 'hero' && ctx.cops) for (const k of ctx.cops) if (!k.dead && Math.abs(k.x - b.x) < 6 && Math.abs(k.y - b.y) < 8) { k.hp -= 1; if (k.hp <= 0) { k.dead = true; k.deadT = 0; } ctx.onHit && ctx.onHit('cop', k); dead = true; break; }
+      if (b.owner !== 'cop') for (const q of peds) if (!q.dead && Math.abs(q.x - b.x) < 6 && Math.abs(q.y - b.y) < 8) { q.dead = true; q.deadT = 0; q.down = 30; q.lie = { x: b.vx, y: b.vy }; hits.push(q); dead = true; break; }
+      if (!dead && b.owner === 'hero' && ctx.cops) for (const k of ctx.cops) if (!k.dead && Math.abs(k.x - b.x) < 6 && Math.abs(k.y - b.y) < 8) { k.hp -= 1; k.lie = { x: b.vx, y: b.vy }; if (k.hp <= 0) { k.dead = true; k.deadT = 0; } ctx.onHit && ctx.onHit('cop', k); dead = true; break; }
       if (!dead && b.owner === 'cop' && ctx.hero && !ctx.driving && !ctx.hero.dead && Math.abs(ctx.hero.x - b.x) < 7 && Math.abs(ctx.hero.y - b.y) < 8) { ctx.onHit && ctx.onHit('hero', b); dead = true; }
-      if (!dead) for (const c of cars) if (inCar(c, b.x, b.y)) { if (b.owner === 'cop' && c === ctx.driving) ctx.onHit && ctx.onHit('hero', b); dead = true; break; }
+      if (!dead) for (const c of cars) if (inCar(c, b.x, b.y)) { if (b.owner === 'cop' && c === ctx.driving) ctx.onHit && ctx.onHit('hero', b); if (b.owner === 'hero' && c.police) { c.hp -= 1; ctx.onHit && ctx.onHit('policecar', c); } dead = true; break; }
     }
     if (dead) bullets.splice(i, 1);
   }

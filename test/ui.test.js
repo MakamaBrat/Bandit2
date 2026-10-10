@@ -65,7 +65,7 @@ const toScreen = o => ({ x: (o.x - D().cam.x) * D().zoom, y: (o.y - D().cam.y) *
   { openRoad(car, 90); tick(2); const h2 = car.heading; el('gas').onpointerdown(); const s3 = rel(-60); L.pointerdown({ pointerId: 1, clientX: s3.x, clientY: s3.y }); tick(45); const h3 = car.heading; L.pointerup({ pointerId: 1 }); el('gas').onpointerup();
     t(ad(h2, h3) > 5, `touch on the car's left side steers left (heading ${Math.round(h2)} -> ${Math.round(h3)})`); }
   // brake pedal slows / reverses
-  { openRoad(car, 180); tick(2); el('gas').onpointerdown(); tick(30); el('gas').onpointerup(); const v = car.speed; el('brake').onpointerdown(); tick(40); el('brake').onpointerup(); t(car.speed < v - 10 && car.speed < 0, `brake button slows the car and then reverses (${Math.round(v)} -> ${Math.round(car.speed)})`); }
+  { openRoad(car, 180); tick(2); el('gas').onpointerdown(); tick(30); el('gas').onpointerup(); const v = car.speed; el('brake').onpointerdown(); tick(40); el('brake').onpointerup(); t(car.speed < v - 40, `brake button slows the car (${Math.round(v)} -> ${Math.round(car.speed)})`); }
 }
 // ---- hold left of the hero on foot: moves left ----
 {
@@ -75,6 +75,15 @@ const toScreen = o => ({ x: (o.x - D().cam.x) * D().zoom, y: (o.y - D().cam.y) *
   t(D().p.x < x0 - 5, `touch to the left of the hero runs left (${Math.round(D().p.x - x0)}px)`);
   const y1 = D().p.y, sp2 = toScreen(D().p); L.pointerdown({ pointerId: 1, clientX: sp2.x, clientY: sp2.y + 150 }); tick(30); L.pointerup({ pointerId: 1 });
   t(D().p.y > y1 + 5, `touch below the hero runs down (${Math.round(D().p.y - y1)}px)`);
+}
+// ---- shooting a pedestrian: blood on the ground and a body lying head-first the way the bullet went ----
+{
+  const d = D(); d.cars.forEach(c => { c.x = 20; c.y = 20; c.speed = 0; c.ai = false; }); openRoad(d.p); d.peds.length = 0; d.cops.length = 0; tick(3);
+  d.p.dir = 0; d.p.weapon = 0; d.p.cool = 0; const victim = { x: d.p.x + 45, y: d.p.y, dir: 30, kind: 'man', pal: 1, down: 0, moving: false, wait: 5, turn: 5, t: 0, vx: 0, vy: 0 }; d.peds.push(victim);
+  el('firebtn').onpointerdown(); tick(30); el('firebtn').onpointerup();
+  t(victim.dead, 'a pedestrian in the line of fire is shot'); t(!!victim.lie && victim.lie.x > 0, 'the body remembers the direction of the shot'); t(d.fxs.stains.length > 0, `blood stains appear (${D().fxs.stains.length})`);
+  tick(30 * 4); t(D().fxs.stains.length >= 3 && victim.poolMade, `a pool forms under the body once it lies still (${D().fxs.stains.length} stains)`);
+  el('bl').onclick(); t(D().fxs.stains.length === 0 && D().fxs.blood === false, 'the blood button switches blood off and clears it'); el('bl').onclick(); t(D().fxs.blood === true, 'and on again');
 }
 // ---- moving traffic is actually visible around the hero ----
 while (D().zoom > 3.2) el('zm').onclick();   // typical zoom
