@@ -9,13 +9,10 @@ export const newCop = (x, y) => ({ x, y, dir: DIR.DOWN, hp: COP_HP, dead: false,
 export function copAnim(c) {
   const b = BASE[c.dir];
   if (c.dead) return b + 10;
-  if (c.since < 0.1) return b + 4;                       // muzzle flash right after a shot
-  if (c.moving) return b + (c.far ? 2 : 1);              // walking / running always wins over the aim pose
-  if (c.aiming) return b + 3;
-  return b;
+  if (c.since < 0.1) return b + 4;
+  if (c.since < 0.6) return b + 3;
+  return b + (c.moving ? (c.far ? 2 : 1) : 0);
 }
-// time base for the animation: shot / aim poses count from the last shot, everything else from the cop's own clock
-export const copAnimTime = c => (c.since < 0.1 || (c.aiming && !c.moving)) ? c.since : c.t;
 
 // clear line of sight: no solid tile between the two points
 export function sees(map, ax, ay, bx, by) {
@@ -24,51 +21,32 @@ export function sees(map, ax, ay, bx, by) {
   return true;
 }
 
-// Advances a cop towards (tx, ty); returns a new bullet (or null). Cops line up on an axis with the target and shoot along it.
-// Everything has hysteresis so nothing flickers: the firing axis is held for a while, a chosen step direction is held for
-// 0.4s, "aligned" turns on at 5px and off only at 12px, and the walking flag is debounced.
-const RUN_SPEED = 90;
+// Advances a cop by one 100 ms tick. Like the original (b.N, mode 6) he runs at the target (75 px/s) while farther than ~98 px, stops within ~73 px
+// and shoots straight at the target in any direction (no lining up on an axis); returns a new bullet or null.
+import { stepFlight } from './ped.js';
 export function stepCop(map, c, tx, ty, dt, rnd = Math.random) {
   c.t += dt;
-  if (c.dead) { c.deadT += dt; c.moving = false; c.aiming = false; return null; }
-  c.cool -= dt; c.since += dt; c.moveHold = Math.max(0, (c.moveHold || 0) - dt); c.mvT = Math.max(0, (c.mvT || 0) - dt); c.axisT = (c.axisT || 0) - dt;
-  const dx = tx - c.x, dy = ty - c.y, dist = Math.hypot(dx, dy);
-  c.far = c.far ? dist > 100 : dist > 140;
-  // firing axis: 'h' shoots along x (needs |dy| small), 'v' along y. Switch only when the other one is clearly closer.
-  const hP = Math.abs(dy), vP = Math.abs(dx);
-  if (!c.axis) { c.axis = hP <= vP ? 'h' : 'v'; c.axisT = 1.2; }
-  else if (c.axisT <= 0) { const o = c.axis === 'h' ? 'v' : 'h', pc = c.axis === 'h' ? hP : vP, po = o === 'h' ? hP : vP; if (po + 24 < pc) { c.axis = o; c.axisT = 1.2; } else c.axisT = 0.3; }
-  const perp = c.axis === 'h' ? hP : vP, along = c.axis === 'h' ? Math.abs(dx) : Math.abs(dy);
-  c.losT = sees(map, c.x, c.y, tx, ty) ? 0.4 : Math.max(0, (c.losT || 0) - dt);
-  const inRange = dist < 190 && c.losT > 0 && along > 8;
-  c.aligned = inRange && perp <= (c.aligned ? 12 : 5);
-  c.aiming = c.aligned || dist < 40;
-  if (c.aligned || dist < 40) {                           // stand, face the target, shoot
-    c.dir = c.axis === 'h' ? (dx < 0 ? DIR.LEFT : DIR.RIGHT) : (dy < 0 ? DIR.UP : DIR.DOWN);
-    if (dist < 40 && !c.aligned) c.dir = Math.abs(dx) > Math.abs(dy) ? (dx < 0 ? DIR.LEFT : DIR.RIGHT) : (dy < 0 ? DIR.UP : DIR.DOWN);
-    c.moving = c.moveHold > 0; c.mvT = 0;
-    if (c.cool <= 0 && c.aligned && perp <= 6) {
+  if (c.flying) { stepFlight(map, c); if (c.dead) c.deadT += dt; c.moving = false; return null; }
+  if (c.dead) { c.deadT += dt; c.moving = false; return null; }
+  c.cool -= dt; c.since += dt;
+  const dx = tx - c.x, dy = ty - c.y, dist = Math.hypot(dx, dy) || 1;
+  c.moving = false; c.far = dist > 98;
+  const face = () => { c.dir = Math.abs(dx) > Math.abs(dy) ? (dx < 0 ? DIR.LEFT : DIR.RIGHT) : (dy < 0 ? DIR.UP : DIR.DOWN); };
+  if (dist <= 73 && sees(map, c.x, c.y, tx, ty)) {
+    face();
+    if (c.cool <= 0) {
       c.cool = 0.9 + rnd() * 0.6; c.since = 0;
-      const vx = c.axis === 'h' ? Math.sign(dx) : 0, vy = c.axis === 'v' ? Math.sign(dy) : 0;
-      return { x: c.x + vx * 12, y: c.y + vy * 6, vx: vx * 260, vy: vy * 260, left: 230, owner: 'cop' };
+      const a = Math.atan2(dy, dx) + (rnd() - 0.5) * 0.16;
+      return { x: c.x + dx / dist * 8, y: c.y + dy / dist * 8, vx: Math.cos(a) * 260, vy: Math.sin(a) * 260, left: 230, owner: 'cop' };
     }
     return null;
   }
-  // step direction: approach along the larger offset, or sidestep to line up; held for 0.4s once chosen
-  if (!(c.mvT > 0)) {
-    let mx = 0, my = 0;
-    if (dist > 150 || !inRange) { if (Math.abs(dx) > Math.abs(dy)) mx = Math.sign(dx); else my = Math.sign(dy); }
-    else if (c.axis === 'h') my = Math.sign(dy) || 1; else mx = Math.sign(dx) || 1;
-    c.mvx = mx; c.mvy = my; c.mvT = 0.4;
-  }
-  const v = (c.far ? RUN_SPEED : COP_SPEED) * dt;
-  const tryMove = (ax, ay) => { if (!(ax || ay) || !canStand(map, c.x + ax * v, c.y + ay * v)) return false; c.x += ax * v; c.y += ay * v; c.dir = ax ? (ax < 0 ? DIR.LEFT : DIR.RIGHT) : (ay < 0 ? DIR.UP : DIR.DOWN); return true; };
-  if (tryMove(c.mvx, c.mvy)) { c.moveHold = 0.15; c.stuckT = 0; }
-  else {                                                   // blocked by a building: after a moment walk around it (a held detour)
-    c.mvT = 0; c.stuckT = (c.stuckT || 0) + dt;
-    if (c.stuckT > 0.3) { const dirs = c.mvx ? [[0, 1], [0, -1]] : [[1, 0], [-1, 0]], d = dirs[Math.floor(rnd() * 2)]; c.mvx = d[0]; c.mvy = d[1]; c.mvT = 0.7 + rnd() * 0.7; c.stuckT = 0; }
-  }
-  c.moving = c.moveHold > 0;
+  const v = (dist > 98 ? 75 : 30) * dt, ux = dx / dist, uy = dy / dist;
+  const tryMove = (ax, ay) => { if (!(ax || ay)) return false; if (canStand(map, c.x + ax * v, c.y + ay * v)) { c.x += ax * v; c.y += ay * v; c.dir = Math.abs(ax) > Math.abs(ay) ? (ax < 0 ? DIR.LEFT : DIR.RIGHT) : (ay < 0 ? DIR.UP : DIR.DOWN); return true; } return false; };
+  if (c.detour > 0) { c.detour -= dt; if (tryMove(c.dx, c.dy)) { c.moving = true; return null; } c.detour = 0; }
+  c.moving = tryMove(ux, uy) || tryMove(Math.sign(ux), 0) || tryMove(0, Math.sign(uy));
+  c.stuckT = c.moving ? 0 : (c.stuckT || 0) + dt;
+  if (c.stuckT > 0.3) { const d = [[1, 0], [-1, 0], [0, 1], [0, -1]][Math.floor(rnd() * 4)]; c.dx = d[0]; c.dy = d[1]; c.detour = 0.6 + rnd() * 0.8; c.stuckT = 0; }
   return null;
 }
 
