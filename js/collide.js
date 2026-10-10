@@ -4,40 +4,75 @@ import { blockedAt } from './player.js';
 const HIT_SPEED = 35;
 const local = (c, o) => { const [fx, fy] = fwd(c.heading), [sx, sy] = side(c.heading), dx = o.x - c.x, dy = o.y - c.y; return { f: dx * fx + dy * fy, s: dx * sx + dy * sy }; };
 
-// A moving car knocks over pedestrians (and the hero on foot). Returns the list of things hit.
-export function carHits(map, c, peds, hero) {
+// A moving car knocks over pedestrians (and the hero on foot) and launches them. Returns the list of things hit.
+export function carHits(map, c, peds, hero, rnd = Math.random) {
   const hit = [];
   if (Math.abs(c.speed) < HIT_SPEED) return hit;
-  const [fx, fy] = fwd(c.heading), dir = Math.sign(c.speed);
+  const [fx, fy] = fwd(c.heading), dir = Math.sign(c.speed), v = Math.abs(c.speed);
   for (const o of [...peds, ...(hero ? [hero] : [])]) {
-    if (o.down > 0) continue;
+    if (o.down > 0 || o.dead) continue;
     const { f, s } = local(c, o);
     if (Math.abs(f) < HL + 3 && Math.abs(s) < HW + 3) {
-      o.down = o === hero ? 1.2 : 6; hit.push(o);
-      const k = Math.min(1, Math.abs(c.speed) / 120) * 14, [sx, sy] = side(c.heading), sg = s >= 0 ? 1 : -1;
-      const nx = o.x + (fx * dir * 0.4 + sx * sg * 0.9) * k, ny = o.y + (fy * dir * 0.4 + sy * sg * 0.9) * k;
-      if (!blockedAt(map, nx, ny)) { o.x = nx; o.y = ny; }
-      c.speed *= 0.85;
+      o.down = o === hero ? 1.4 : 6; hit.push(o);
+      const [sx, sy] = side(c.heading), sg = s >= 0 ? 1 : -1, launch = 40 + v * 0.9, lat = sg * (25 + rnd() * 35);
+      o.fly = { vx: fx * dir * launch + sx * lat, vy: fy * dir * launch + sy * lat, z: 0, vz: 100 + v * 0.7, rot: 0, spin: (rnd() < 0.5 ? -1 : 1) * (10 + rnd() * 8), v };
+      c.speed *= 0.88;
     }
   }
   return hit;
 }
 
-// Each car is two circles (front and rear); the closest pair decides the overlap.
-const circles = c => { const [fx, fy] = fwd(c.heading), o = HL - HW; return [[c.x + fx * o, c.y + fy * o], [c.x - fx * o, c.y - fy * o]]; };
-export function carVsCar(map, a, b) {
-  if (Math.hypot(a.x - b.x, a.y - b.y) > 2 * HL + 4) return false;
-  let best = null;
-  for (const [ax, ay] of circles(a)) for (const [bx, by] of circles(b)) { const d = Math.hypot(bx - ax, by - ay); if (!best || d < best.d) best = { d, dx: bx - ax, dy: by - ay }; }
-  const min = 2 * HW, d = best.d || 0.001;
-  if (d >= min) return false;
-  const nx = best.dx / d, ny = best.dy / d, push = (min - d) / 2;
-  for (const [c, sg] of [[a, -1], [b, 1]]) {
-    const x = c.x + nx * push * sg, y = c.y + ny * push * sg;
-    if (!carBlocked(map, x, y, c.heading)) { c.x = x; c.y = y; }
-  }
-  const sa = a.speed, sb = b.speed; a.speed = sb * 0.5 + sa * 0.2; b.speed = sa * 0.5 + sb * 0.2;
+// Flight of a launched pedestrian / hero: arc with gravity, bounces, slides to a stop. Walls stop the slide.
+export function flyStep(map, o, dt) {
+  const f = o.fly; if (!f) return false;
+  const nx = o.x + f.vx * dt, ny = o.y + f.vy * dt;
+  if (!blockedAt(map, nx, o.y)) o.x = nx; else f.vx *= -0.3;
+  if (!blockedAt(map, o.x, ny)) o.y = ny; else f.vy *= -0.3;
+  f.z += f.vz * dt; f.vz -= 520 * dt; f.rot += f.spin * dt;
+  if (f.z <= 0) { f.z = 0; if (f.vz < -80) { f.vz = -f.vz * 0.35; f.spin *= 0.5; f.hard = true; } else f.vz = 0; }
+  if (f.z === 0) { const d = Math.exp(-5 * dt); f.vx *= d; f.vy *= d; f.spin *= Math.exp(-6 * dt); }
+  if (f.z === 0 && f.vz === 0 && Math.hypot(f.vx, f.vy) < 8) { o.fly = null; return false; }
   return true;
+}
+
+// ---- car vs car: oriented rectangles (separating axis test), push apart, impulse, spin ----
+const SPIN = 0.07, RESTITUTION = 0.35;
+const ax2 = h => { const [fx, fy] = fwd(h), [sx, sy] = side(h); return [[fx, fy], [sx, sy]]; };
+const dot = (u, v) => u[0] * v[0] + u[1] * v[1];
+// null when the cars do not overlap, otherwise { depth, n (from a to b), x, y (contact point) }
+export function obbOverlap(a, b) {
+  const A = ax2(a.heading), B = ax2(b.heading), dx = b.x - a.x, dy = b.y - a.y; let best = null;
+  for (const ax of [A[0], A[1], B[0], B[1]]) {
+    const ra = HL * Math.abs(dot(A[0], ax)) + HW * Math.abs(dot(A[1], ax)), rb = HL * Math.abs(dot(B[0], ax)) + HW * Math.abs(dot(B[1], ax));
+    const d = dx * ax[0] + dy * ax[1], ov = ra + rb - Math.abs(d);
+    if (ov <= 0) return null;
+    if (!best || ov < best.depth) { const n = d >= 0 ? ax : [-ax[0], -ax[1]]; best = { depth: ov, n, x: a.x + n[0] * (ra - ov / 2), y: a.y + n[1] * (ra - ov / 2) }; }
+  }
+  return best;
+}
+const vel = c => { const [fx, fy] = fwd(c.heading); return [fx * c.speed + (c.kx || 0), fy * c.speed + (c.ky || 0)]; };
+function setVel(c, v) { const [fx, fy] = fwd(c.heading), s = v[0] * fx + v[1] * fy; c.speed = Math.max(-60, Math.min(160, s)); c.kx = v[0] - fx * s; c.ky = v[1] - fy * s; }
+
+// Returns false, or { x, y, nx, ny, impact } (impact = closing speed along the normal, px/s)
+export function carVsCar(map, a, b) {
+  if (Math.hypot(a.x - b.x, a.y - b.y) > 2 * Math.hypot(HL, HW)) return false;
+  const o = obbOverlap(a, b); if (!o) return false;
+  const [nx, ny] = o.n, push = o.depth / 2 + 0.5;
+  const ax = a.x - nx * push, ay = a.y - ny * push, bx = b.x + nx * push, by = b.y + ny * push;
+  const aOk = !carBlocked(map, ax, ay, a.heading), bOk = !carBlocked(map, bx, by, b.heading);
+  if (aOk && bOk) { a.x = ax; a.y = ay; b.x = bx; b.y = by; }
+  else if (aOk) { a.x -= nx * push * 2; a.y -= ny * push * 2; } else if (bOk) { b.x += nx * push * 2; b.y += ny * push * 2; }
+  const va = vel(a), vb = vel(b), vn = (vb[0] - va[0]) * nx + (vb[1] - va[1]) * ny;
+  let impact = 0;
+  if (vn < 0) {
+    impact = -vn; const j = (1 + RESTITUTION) * impact / 2;
+    setVel(a, [va[0] - j * nx, va[1] - j * ny]); setVel(b, [vb[0] + j * nx, vb[1] + j * ny]);
+    const cross = (r, fx2, fy2) => r[0] * fy2 - r[1] * fx2;      // screen coordinates (y down): positive = clockwise = heading decreases
+    const clampSpin = s => Math.max(-220, Math.min(220, s));
+    a.spin = clampSpin((a.spin || 0) - SPIN * cross([o.x - a.x, o.y - a.y], -j * nx, -j * ny));
+    b.spin = clampSpin((b.spin || 0) - SPIN * cross([o.x - b.x, o.y - b.y], j * nx, j * ny));
+  }
+  return { x: o.x, y: o.y, nx, ny, impact };
 }
 
 // The hero on foot cannot walk through a car body. Returns true when (x, y) is inside some car's rectangle (with a small margin).

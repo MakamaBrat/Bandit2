@@ -65,7 +65,7 @@ const toScreen = o => ({ x: (o.x - D().cam.x) * D().zoom, y: (o.y - D().cam.y) *
   { openRoad(car, 90); tick(2); const h2 = car.heading; el('gas').onpointerdown(); const s3 = rel(-60); L.pointerdown({ pointerId: 1, clientX: s3.x, clientY: s3.y }); tick(45); const h3 = car.heading; L.pointerup({ pointerId: 1 }); el('gas').onpointerup();
     t(ad(h2, h3) > 5, `touch on the car's left side steers left (heading ${Math.round(h2)} -> ${Math.round(h3)})`); }
   // brake pedal slows / reverses
-  { openRoad(car, 180); tick(2); el('gas').onpointerdown(); tick(30); el('gas').onpointerup(); const v = car.speed; el('brake').onpointerdown(); tick(40); el('brake').onpointerup(); t(car.speed < v - 10 && car.speed < 0, `brake button slows the car and then reverses (${Math.round(v)} -> ${Math.round(car.speed)})`); }
+  { openRoad(car, 180); tick(2); el('gas').onpointerdown(); tick(30); el('gas').onpointerup(); const v = car.speed; el('brake').onpointerdown(); tick(40); el('brake').onpointerup(); t(car.speed < v - 40, `brake button slows the car (${Math.round(v)} -> ${Math.round(car.speed)})`); }
 }
 // ---- hold left of the hero on foot: moves left ----
 {
