@@ -1,11 +1,13 @@
 import { loadMap, loadSprite, drawMap, drawFrame, animAt } from './engine.js';
 import { newPlayer, step, animIndex, DIR } from './player.js';
 import { lyingPose, facingOf } from './lying.js';
-import { spawnCars, stepCar, nearestCar, exitSpot, carDist, side, CAR_SPRITES } from './vehicle.js';
+import { spawnCars, stepCar, nearestCar, exitSpot, carDist, side, wheels, CAR_SPRITES } from './vehicle.js';
 import { spawnPeds, stepPed, pedAnim, topUpPeds } from './ped.js';
 import { spawnTraffic, stepTraffic, topUpTraffic, managePoliceCars } from './traffic.js';
-import { carHits, carVsCar, keepOutOfCars, flyStep } from './collide.js';
-import { newFx, addSparks, addPuff, stepFx, drawFx, shake, addBlood, addPool, smear, stepBlood, drawStains, drawDrops } from './fx.js';
+import { carHits, carVsCar, keepOutOfCars, flyStep, launchBody } from './collide.js';
+import { createAudio, attenuation } from './audio.js';
+import { damageCar, damageFromCrash, damageFromWall, stepCarFire, explode, isUsable, burning } from './damage.js';
+import { newFx, addSparks, addPuff, stepFx, drawFx, shake, addBlood, addPool, smear, stepBlood, drawStains, drawDrops, skidStep, tyreSmoke, addSmoke, addFlame, addExplosion, drawSkids, drawFire } from './fx.js';
 import { newCop, stepCop, copAnim, copAnimTime, newWanted, addHeat, stars, stepWanted, manageCops, hurtHero, reviveHero, HERO_HP } from './police.js';
 import { findSpawn } from './player.js';
 import { WEAPONS, arm, nextWeapon, stepArm, fire, armAnim, stepBullets, scare } from './weapons.js';
@@ -15,13 +17,17 @@ function resize() { VW = Math.ceil(innerWidth / zoom); VH = Math.ceil(innerHeigh
 function setZoom(z) { zoom = Math.max(1, Math.min(8, z)); try { localStorage.setItem('zoom', zoom); } catch (e) {} resize(); }
 { let z = NaN; try { z = parseFloat(localStorage.getItem('zoom')); } catch (e) {} zoom = z >= 1 && z <= 8 ? z : Math.max(2, Math.min(4, Math.round(Math.min(innerWidth, innerHeight) / 200))); resize(); }
 addEventListener('resize', resize);
+let soundOff = false; try { soundOff = localStorage.getItem('sound') === '0'; } catch (e) {}
+const audio = createAudio(globalThis, soundOff);
+const unlockAudio = () => audio.unlock(); addEventListener('pointerdown', unlockAudio); addEventListener('keydown', unlockAudio);
+function toggleSound() { const m = audio.toggle(); try { localStorage.setItem('sound', m ? '0' : '1'); } catch (e) {} $('snd').textContent = m ? '🔇' : '🔊'; }
 const fxs = newFx();
 try { if (localStorage.getItem('blood') === '0') fxs.blood = false; } catch (e) {}
 function toggleBlood() { fxs.blood = !fxs.blood; if (!fxs.blood) { fxs.stains.length = 0; fxs.drops.length = 0; } try { localStorage.setItem('blood', fxs.blood ? '1' : '0'); } catch (e) {} }
 let rammed = 0, cops = [], wanted = newWanted(), wastedT = -1, bullets = [], map, hero, heroPal = {}, peds = [], p, cam = { x: 0, y: 0 }, debug = false, cars = [], carSpr = {}, drive = null, hint = '';
 const keys = {};
 const map_ = { ArrowLeft: 'left', a: 'left', ArrowRight: 'right', d: 'right', ArrowUp: 'up', w: 'up', ArrowDown: 'down', s: 'down', left: 'left', right: 'right', up: 'up', down: 'down' };
-addEventListener('keydown', e => { keys[e.key.toLowerCase()] = keys[e.key] = true; if (e.key === 'f') debug = !debug; if ((e.key === 'e' || e.key === 'E') && !e.repeat) toggleCar(); if ((e.key === 'q' || e.key === 'Q') && !e.repeat && !drive) nextWeapon(p); if ((e.key === 'b' || e.key === 'B') && !e.repeat) toggleBlood(); if (e.key.startsWith('Arrow') || e.key === ' ') e.preventDefault(); });
+addEventListener('keydown', e => { keys[e.key.toLowerCase()] = keys[e.key] = true; if (e.key === 'f') debug = !debug; if ((e.key === 'e' || e.key === 'E') && !e.repeat) toggleCar(); if ((e.key === 'q' || e.key === 'Q') && !e.repeat && !drive) nextWeapon(p); if ((e.key === 'b' || e.key === 'B') && !e.repeat) toggleBlood(); if ((e.key === 'm' || e.key === 'M') && !e.repeat) toggleSound(); if (e.key.startsWith('Arrow') || e.key === ' ') e.preventDefault(); });
 addEventListener('keyup', e => { keys[e.key.toLowerCase()] = keys[e.key] = false; });
 const input = () => { const i = { run: !!(keys.Shift || keys.shift) }; for (const k in map_) if (keys[k]) i[map_[k]] = true; return i; };
 // ---- pointer / touch: hold left/right/above/below the hero to run that way (any direction for a car), tap a car to get in, wheel / pinch to zoom ----
@@ -34,7 +40,7 @@ cv.addEventListener('pointerdown', e => {
   if (ptrs.size > 2 || p.dead) return;
   const w = world({ x: e.clientX, y: e.clientY });
   if (!drive) {
-    let best = null, bd = 6; for (const c of cars) { const d = carDist(c, w.x, w.y); if (d < bd) { bd = d; best = c; } }
+    let best = null, bd = 6; for (const c of cars) { if (!isUsable(c)) continue; const d = carDist(c, w.x, w.y); if (d < bd) { bd = d; best = c; } }
     if (best) { auto = { car: best, t: 0, lx: p.x, ly: p.y, still: 0, axis: null }; aim = null; return; }
   }
   auto = null; aim = { x: e.clientX, y: e.clientY };
@@ -57,6 +63,7 @@ const pointerInput = () => {
 // walk to the tapped car and get in
 const autoInput = dt => {
   if (!auto || drive) return {}; const c = auto.car, dx = c.x - p.x, dy = c.y - p.y; auto.t += dt;
+  if (!isUsable(c)) { auto = null; return {}; }
   if (carDist(c, p.x, p.y) <= 10) { drive = c; c.ai = false; auto = null; return {}; }
   if (auto.t > 8) { auto = null; return {}; }
   auto.still = Math.hypot(p.x - auto.lx, p.y - auto.ly) < 0.3 ? auto.still + dt : 0; auto.lx = p.x; auto.ly = p.y;
@@ -68,7 +75,7 @@ const autoInput = dt => {
 
 function toggleCar() {
   if (drive) { const sp = exitSpot(map, drive); if (!sp) return; p.x = sp.x; p.y = sp.y; drive.speed = 0; drive = null; return; }
-  const c = nearestCar(cars, p); if (c) { drive = c; c.ai = false; }
+  const c = nearestCar(cars.filter(isUsable), p); if (c) { drive = c; c.ai = false; }
 }
 async function start(tag) { map = await loadMap(tag); p = arm(newPlayer(map)); p.hp = HERO_HP; bullets = []; cops = []; wanted = newWanted(); wastedT = -1; drive = null; cars = [...spawnCars(map, p, 5), ...spawnTraffic(map, p, 6)]; topUpTraffic(map, p, cars, 8, Math.random, 60, 260); peds = spawnPeds(map, p, 14); }
 $('city').onchange = e => start(e.target.value);
@@ -76,11 +83,28 @@ $('city').onchange = e => start(e.target.value);
 document.querySelectorAll('[data-k]').forEach(b => { const k = b.dataset.k; b.onpointerdown = () => keys[k] = true; b.onpointerup = b.onpointerleave = b.onpointercancel = () => keys[k] = false; });
 
 $('ebtn').onpointerdown = toggleCar;
-$('bl').onclick = toggleBlood;
+$('bl').onclick = toggleBlood; $('snd').onclick = toggleSound; $('snd').textContent = audio.muted ? '🔇' : '🔊';
 $('zp').onclick = () => setZoom(zoom * 1.25); $('zm').onclick = () => setZoom(zoom / 1.25);
 $('fs').onclick = () => { const el = document.documentElement; try { if (document.fullscreenElement || document.webkitFullscreenElement) (document.exitFullscreen || document.webkitExitFullscreen).call(document); else (el.requestFullscreen || el.webkitRequestFullscreen).call(el); } catch (e) {} };
 $('city').onfocus = () => { for (const k in keys) keys[k] = false; };
 $('qbtn').onpointerdown = () => { if (!drive) nextWeapon(p); };
+const att = (x, y, maxd = 480) => attenuation(Math.hypot(x - (drive || p).x, y - (drive || p).y), maxd);
+function blowUp(c) {
+  addExplosion(fxs, c.x, c.y); audio.boom(Math.max(0.25, att(c.x, c.y, 900)));
+  const out = explode(c, { peds, cops, hero: (!drive || drive === c) ? p : null, cars, driving: drive });
+  for (const q of out.killed) addBlood(fxs, q.x, q.y - 8, 1, q.lie.x, q.lie.y);
+  for (const k of out.killedCops) addHeat(wanted, 60); for (const k of out.hurtCops) addHeat(wanted, 10);
+  if (out.heroDamage > 0) {
+    if (drive === c) { p.x = c.x; p.y = c.y; drive = null; launchBody(p, 0, 1, 70, 150); p.down = 1.6; }
+    addBlood(fxs, p.x, p.y - 8, 0.8, p.lie ? p.lie.x : 0, p.lie ? p.lie.y : 0); if (hurtHero(p, out.heroDamage)) wastedT = 0;
+  }
+  shake(fxs, 9 * Math.max(0.3, att(c.x, c.y, 600)));
+}
+function fireEvent(c, e) {
+  if (e.type === 'smoke') addSmoke(fxs, e.x, e.y, e.heavy ? { r: 3, grow: 12, rise: 28, spread: 12, life: 1.3, a: 0.6, col: [34, 33, 32] } : { r: 2, grow: 9, rise: 18, spread: 10, life: 1.1, a: 0.36, col: [195, 195, 195] });
+  else if (e.type === 'flame') addFlame(fxs, e.x, e.y, { rise: 46, life: 0.55 });
+  else if (e.type === 'explode') blowUp(c);
+}
 // draws a character; while flying it gets a ground shadow, height and a spin around its middle
 function drawBody(spr, a, x, y, fly, xor = 0) {
   if (!fly) { drawFrame(ctx, spr, a.frame, x + a.dx, y + a.dy, a.flip ^ xor); return; }
@@ -88,7 +112,7 @@ function drawBody(spr, a, x, y, fly, xor = 0) {
   ctx.fillStyle = 'rgba(0,0,0,' + Math.max(0.12, 0.35 - fly.z * 0.006).toFixed(2) + ')'; ctx.beginPath(); ctx.ellipse(x, y, Math.max(3, 8 - fly.z * 0.08), 3, 0, 0, Math.PI * 2); ctx.fill();
   ctx.save(); ctx.translate(x, y - fly.z - 10); ctx.rotate(fly.rot); drawFrame(ctx, spr, a.frame, a.dx, a.dy + 10, a.flip ^ xor); ctx.restore();
 }
-globalThis.__dbg = () => ({ get drive() { return drive; }, cars, peds, cops, p, cam, zoom, VW, VH, map, fxs });
+globalThis.__dbg = () => ({ get drive() { return drive; }, cars, peds, cops, p, cam, zoom, VW, VH, map, fxs, audio });
 let last = performance.now();
 function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
@@ -105,7 +129,7 @@ function frame(now) {
   for (const c of cars) if (c !== drive) { if (c.ai) stepTraffic(map, c, c.police ? obst.filter(o => o !== p && o !== drive) : obst, dt); else if (Math.abs(c.speed) > 0) stepCar(map, c, {}, dt); }   // traffic drives, abandoned cars roll to a stop
   for (const q of peds) stepPed(map, q, dt);
   stepArm(p, dt);
-  if (!drive && !p.dead && (keys[' '] || keys.fire)) { const nb = fire(p); if (nb.length) { bullets.push(...nb); scare(peds, p.x, p.y); } }
+  if (!drive && !p.dead && (keys[' '] || keys.fire)) { const nb = fire(p); if (nb.length) { bullets.push(...nb); scare(peds, p.x, p.y); audio.shot(p.weapon, 1); } }
   const onHit = (kind, t) => {
     if (kind === 'cop') addBlood(fxs, t.x, t.y - 8, t.dead ? 0.9 : 0.5, t.lie ? t.lie.x : 0, t.lie ? t.lie.y : 0);
     if (kind === 'hero' && !drive) { p.lie = { x: t.vx, y: t.vy }; addBlood(fxs, p.x, p.y - 8, 0.5, t.vx, t.vy); }
@@ -115,7 +139,7 @@ function frame(now) {
   };
   for (const q of stepBullets(map, bullets, peds, cars, dt, { cops, hero: p, driving: drive, onHit })) { scare(peds, q.x, q.y, 120); addHeat(wanted, 30); addBlood(fxs, q.x, q.y - 8, 0.8, q.lie ? q.lie.x : 0, q.lie ? q.lie.y : 0); }
   manageCops(map, wanted, cops, tx, ty); stepWanted(wanted, cops, tx, ty, dt);
-  for (const c of cops) { const b = stepCop(map, c, tx, ty, dt); if (b) bullets.push(b); }
+  for (const c of cops) { const b = stepCop(map, c, tx, ty, dt); if (b) { bullets.push(b); audio.shot(0, att(c.x, c.y, 520) * 0.8); } }
   const viewR = Math.hypot(VW, VH) / 2;
   managePoliceCars(map, stars(wanted), drive || p, cars, Math.random, viewR + 40, viewR + 240);
   topUpPeds(map, drive || p, peds, 14, Math.random, viewR + 20, viewR + 320); topUpTraffic(map, drive || p, cars, 12, Math.random, viewR + 20, viewR + 230);
@@ -124,16 +148,28 @@ function frame(now) {
   if (p.fly) { flyStep(map, p, dt); if (p.fly && p.fly.hard) { p.fly.hard = false; addPuff(fxs, p.x, p.y - 2, 3); } }
   for (let i = 0; i < cars.length; i++) {
     const c = cars[i];
+    if (c.hp <= 0 && c.ai) c.ai = false;                                         // a burning car is no longer driven by its AI
+    { const w = wheels(c); skidStep(fxs, c, w); if (c.slip > 0.55 && Math.random() < dt * 28 * c.slip) { const k = Math.random() < 0.5 ? 0 : 1; tyreSmoke(fxs, w[k][0], w[k][1], c.slip); } }
+    for (const e of stepCarFire(c, dt)) fireEvent(c, e);
+    if (c === drive && c.hp <= 0 && !c.wreck && hurtHero(p, 5 * dt)) { p.x = c.x; p.y = c.y; drive = null; wastedT = 0; }   // burning alive
+    if (c.wreck) c.wreckAge = (c.wreckAge || 0) + dt;
     const hit = carHits(map, c, peds, drive ? null : p, Math.random, c.police ? [] : cops);   // police cars do not run over their own
+    if (hit.length) audio.thud(Math.max(0.35, att(c.x, c.y)));
     for (const o of hit) { addBlood(fxs, o.x, o.y - 6, Math.min(1.5, Math.abs(c.speed) / 90), Math.cos(c.heading * Math.PI / 180) * Math.sign(c.speed), -Math.sin(c.heading * Math.PI / 180) * Math.sign(c.speed)); addSparks(fxs, o.x, o.y - 8, 0.35, Math.cos(c.heading * Math.PI / 180) * Math.sign(c.speed), -Math.sin(c.heading * Math.PI / 180) * Math.sign(c.speed)); addPuff(fxs, o.x, o.y - 6, 4); if (c === drive) shake(fxs, 2); }
     if (c === drive) for (const o of hit) if (o !== p) addHeat(wanted, cops.includes(o) ? (o.dead ? 60 : 25) : 20);
     if (c.police && hit.includes(p) && hurtHero(p, 15)) wastedT = 0;
-    if (c.bump) { addSparks(fxs, c.bump.x, c.bump.y, Math.min(1.3, c.bump.v / 120)); if (c.bump.v > 90) addPuff(fxs, c.bump.x, c.bump.y, 3); if (c === drive) shake(fxs, Math.min(7, c.bump.v / 22)); c.bump = null; }
+    if (c.bump) { damageFromWall(c, c.bump.v); audio.crash(Math.min(1, c.bump.v / 160), att(c.x, c.y)); addSparks(fxs, c.bump.x, c.bump.y, Math.min(1.3, c.bump.v / 120)); if (c.bump.v > 90) addPuff(fxs, c.bump.x, c.bump.y, 3); if (c === drive) shake(fxs, Math.min(7, c.bump.v / 22)); c.bump = null; }
     for (let j = i + 1; j < cars.length; j++) {
       const r = carVsCar(map, c, cars[j]); if (!r) continue;
-      if (r.impact > 25) { addSparks(fxs, r.x, r.y, Math.min(1.6, r.impact / 100)); if (r.impact > 80) addPuff(fxs, r.x, r.y, 4); if (c === drive || cars[j] === drive) shake(fxs, Math.min(8, r.impact / 16)); }
+      if (r.impact > 25) { damageFromCrash(c, r.impact); damageFromCrash(cars[j], r.impact); audio.crash(Math.min(1, r.impact / 170), att(r.x, r.y)); addSparks(fxs, r.x, r.y, Math.min(1.6, r.impact / 100)); if (r.impact > 80) addPuff(fxs, r.x, r.y, 4); if (c === drive || cars[j] === drive) shake(fxs, Math.min(8, r.impact / 16)); }
       if (drive && (c === drive || cars[j] === drive) && (c.police || cars[j].police) && !(rammed > 0)) { rammed = 0.6; if (hurtHero(p, 6)) { p.x = drive.x; p.y = drive.y; drive = null; wastedT = 0; } }
     }
+  }
+  for (let i = cars.length - 1; i >= 0; i--) { const c = cars[i]; if (c.wreck && c !== drive && c.wreckAge > 90 && Math.hypot(c.x - tx, c.y - ty) > 380) cars.splice(i, 1); }   // old burnt-out wrecks go away when out of sight
+  { // sound: engine of the hero's car, loudest tyre squeal / siren / fire near the hero
+    let slipL = 0, sirenL = 0, fireL = 0;
+    for (const c of cars) { const a = att(c.x, c.y); slipL = Math.max(slipL, c.slip * a); if (c.police && c.ai) sirenL = Math.max(sirenL, att(c.x, c.y, 600)); if (burning(c)) fireL = Math.max(fireL, att(c.x, c.y, 360)); }
+    audio.update({ driving: !!drive && !p.dead, throttle: !!inp.up, speed: drive ? drive.speed : 0, slip: slipL, siren: sirenL, fire: fireL });
   }
   stepFx(fxs, dt); stepBlood(fxs, dt);
   for (const o of [...peds, ...cops, p]) {                                     // smears while a body slides, a pool once it lies still
@@ -143,16 +179,16 @@ function frame(now) {
   const fx = drive ? drive.x : p.x, fy = drive ? drive.y : p.y;
   cam.x = fx - VW / 2 + (Math.random() - 0.5) * 2 * fxs.shake; cam.y = fy - VH / 2 + (Math.random() - 0.5) * 2 * fxs.shake;
   const c = drawMap(ctx, map, cam.x, cam.y, VW, VH); cam.x = c.camX; cam.y = c.camY;
-  drawStains(ctx, fxs, cam.x, cam.y);
+  drawSkids(ctx, fxs, cam.x, cam.y); drawStains(ctx, fxs, cam.x, cam.y);
   const sx = p.x - cam.x, sy = p.y - cam.y;
   const lyingH = !drive && (p.down > 0 || p.dead), lpH = lyingH ? lyingPose('man', p.lie, facingOf(DIR, p.dir)) : null;
   const aa = !drive && !lyingH && armAnim(p), ai = lpH ? lpH.anim : (aa || animIndex(p)), a = animAt(hero, ai, aa ? p.since * 1000 : p.t * 1000);
-  const items = cars.map(c => ({ y: c.y, draw: () => { const spr = carSpr[c.type], an = spr.info.animations[c.anim][0]; drawFrame(ctx, spr, an.frame, c.x - cam.x, c.y - cam.y, an.flip); } }));
+  const items = cars.map(c => ({ y: c.y, draw: () => { const spr = carSpr[c.type], an = spr.info.animations[c.anim][0]; drawFrame(ctx, spr, an.frame, c.x - cam.x, c.y - cam.y, an.flip, !!c.wreck); } }));
   for (const q of peds) items.push({ y: q.y + 1, draw: () => { const s = q.kind === 'woman' ? hero : heroPal[q.pal], lp = (q.dead || q.down > 0) ? lyingPose(q.kind === 'woman' ? 'woman' : 'man', q.lie, facingOf(DIR, q.dir)) : null, a = animAt(s, lp ? lp.anim : pedAnim(q), q.t * 1000); if (a) drawBody(s, a, q.x - cam.x, q.y - cam.y, q.fly, lp ? lp.xor : 0); } });
   for (const c of cops) items.push({ y: c.y + 1, draw: () => { const lp = (c.dead || c.down > 0) ? lyingPose('cop', c.lie, facingOf(DIR, c.dir)) : null, k = lp ? lp.anim : copAnim(c), a = animAt(hero, k, copAnimTime(c) * 1000); if (a) drawBody(hero, a, c.x - cam.x, c.y - cam.y, c.fly, lp ? lp.xor : 0); } });
   if (!drive) items.push({ y: p.y + 1, draw: () => { if (a) drawBody(hero, a, sx, sy, p.fly, lpH ? lpH.xor : 0); } });
   items.sort((u, v) => u.y - v.y).forEach(i => i.draw());
-  drawFx(ctx, fxs, cam.x, cam.y); drawDrops(ctx, fxs, cam.x, cam.y);
+  drawFx(ctx, fxs, cam.x, cam.y); drawDrops(ctx, fxs, cam.x, cam.y); drawFire(ctx, fxs, cam.x, cam.y);
   ctx.fillStyle = '#ff0'; for (const b of bullets) ctx.fillRect(b.x - cam.x - 1, b.y - cam.y - 18, 2, 2);
   ctx.fillStyle = '#400'; ctx.fillRect(4, 14, 52, 5); ctx.fillStyle = '#e33'; ctx.fillRect(4, 14, 52 * Math.max(0, p.hp) / HERO_HP, 5);
   ctx.fillStyle = '#fc0'; ctx.font = '10px monospace'; ctx.fillText('★'.repeat(stars(wanted)) + '☆'.repeat(3 - stars(wanted)), VW - 44, 12);

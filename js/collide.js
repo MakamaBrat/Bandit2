@@ -24,6 +24,12 @@ export function carHits(map, c, peds, hero, rnd = Math.random, cops = []) {
   return hit;
 }
 
+// Launch a body (pedestrian, cop, hero) along (ux, uy): speed px/s horizontally, vz px/s upwards.
+export function launchBody(o, ux, uy, speed, vz, rnd = Math.random) {
+  o.fly = { vx: ux * speed, vy: uy * speed, z: 0, vz, rot: 0, spin: (rnd() < 0.5 ? -1 : 1) * (10 + rnd() * 8), v: speed };
+  o.lie = { x: ux, y: uy };
+}
+
 // Flight of a launched pedestrian / hero: arc with gravity, bounces, slides to a stop. Walls stop the slide.
 export function flyStep(map, o, dt) {
   const f = o.fly; if (!f) return false;
@@ -57,12 +63,16 @@ function setVel(c, v) { const [fx, fy] = fwd(c.heading), s = v[0] * fx + v[1] * 
 
 // Returns false, or { x, y, nx, ny, impact } (impact = closing speed along the normal, px/s)
 export function carVsCar(map, a, b) {
+  if (a.wreck && b.wreck) return false;
   if (Math.hypot(a.x - b.x, a.y - b.y) > 2 * Math.hypot(HL, HW)) return false;
   const o = obbOverlap(a, b); if (!o) return false;
-  const [nx, ny] = o.n, push = o.depth / 2 + 0.5;
+  const [nx, ny] = o.n, push = o.depth / 2 + 0.5, snap = a.wreck ? a : b.wreck ? b : null, keep = snap && { x: snap.x, y: snap.y };
+  const finish = r => { if (snap) { snap.x = keep.x; snap.y = keep.y; snap.speed = 0; snap.kx = snap.ky = snap.spin = 0; } return r; };
   const ax = a.x - nx * push, ay = a.y - ny * push, bx = b.x + nx * push, by = b.y + ny * push;
   const aOk = !carBlocked(map, ax, ay, a.heading), bOk = !carBlocked(map, bx, by, b.heading);
-  if (aOk && bOk) { a.x = ax; a.y = ay; b.x = bx; b.y = by; }
+  if (a.wreck) { if (!carBlocked(map, b.x + nx * push * 2, b.y + ny * push * 2, b.heading)) { b.x += nx * push * 2; b.y += ny * push * 2; } }
+  else if (b.wreck) { if (!carBlocked(map, a.x - nx * push * 2, a.y - ny * push * 2, a.heading)) { a.x -= nx * push * 2; a.y -= ny * push * 2; } }
+  else if (aOk && bOk) { a.x = ax; a.y = ay; b.x = bx; b.y = by; }
   else if (aOk) { a.x -= nx * push * 2; a.y -= ny * push * 2; } else if (bOk) { b.x += nx * push * 2; b.y += ny * push * 2; }
   const va = vel(a), vb = vel(b), vn = (vb[0] - va[0]) * nx + (vb[1] - va[1]) * ny;
   let impact = 0;
@@ -74,7 +84,7 @@ export function carVsCar(map, a, b) {
     a.spin = clampSpin((a.spin || 0) - SPIN * cross([o.x - a.x, o.y - a.y], -j * nx, -j * ny));
     b.spin = clampSpin((b.spin || 0) - SPIN * cross([o.x - b.x, o.y - b.y], j * nx, j * ny));
   }
-  return { x: o.x, y: o.y, nx, ny, impact };
+  return finish({ x: o.x, y: o.y, nx, ny, impact });
 }
 
 // The hero on foot cannot walk through a car body. Returns true when (x, y) is inside some car's rectangle (with a small margin).

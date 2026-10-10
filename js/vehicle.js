@@ -4,10 +4,6 @@ import { blockedAt } from './player.js';
 export const CAR_SPRITES = ['k_00', 'k_01', 'k_02', 'k_03', 'k_04'];
 export const HL = 34, HW = 15;               // half length / half width of the collision box (px); the car art is ~72-86 x 33-41
 const ACCEL = 170, BRAKE = 320, DRAG = 55, MAXF = 150, MAXR = -50, TURN = 120;
-export const CAR_HP = 30;                                   // original: engine smokes at hp <= 13, burns at 0 (see carfx.js)
-// Tyre grip: the heading turns, the momentum does not. The sideways part of the velocity (c.vl, px/s, + = to the car's right) is pulled back by the tyres;
-// hard steering at speed or the handbrake let it grow, and a sliding car leaves tyre marks (c.mark, read by carfx.feedSkid).
-const GRIP = 9, GRIP_HAND = 2.4, HAND_DECEL = 150, SLIP_MARK = 16, LOCK_SPEED = 85;
 const rad = d => d * Math.PI / 180;
 export const fwd = h => [Math.cos(rad(h)), -Math.sin(rad(h))];
 export const side = h => [Math.sin(rad(h)), Math.cos(rad(h))];
@@ -19,35 +15,40 @@ export function samples(x, y, h) {
 }
 export const carBlocked = (map, x, y, h) => samples(x, y, h).some(([px, py]) => map.tileAt(px, py).collision === 2);
 
-export function newCar(type, x, y, heading) { return { type, x, y, heading, speed: 0, driver: false, anim: Math.round(heading / 22.5) % 16, hp: CAR_HP, vl: 0 }; }
+export function newCar(type, x, y, heading) { return { type, x, y, heading, speed: 0, driver: false, anim: 0, hp: 100, hpMax: 100, slip: 0 }; }
+// wheel contact points (rear pair first, then the front pair)
+export function wheels(c) {
+  const [fx, fy] = fwd(c.heading), [sx, sy] = side(c.heading), l = HL * 0.55, w = HW * 0.75;
+  return [[-l, -w], [-l, w], [l, -w], [l, w]].map(([a, b]) => [c.x + fx * a + sx * b, c.y + fy * a + sy * b]);
+}
 
 export function stepCar(map, c, input, dt) {
-  const up = !!input.up, down = !!input.down, hand = !!input.hand, steer = (input.left ? 1 : 0) - (input.right ? 1 : 0);
-  const x0 = c.x, y0 = c.y, h0 = c.heading; c.mark = null;
+  const up = !!input.up, down = !!input.down, steer = (input.left ? 1 : 0) - (input.right ? 1 : 0);
   const onWalk = map.tileAt(c.x, c.y).collision === 1;
   const maxF = onWalk ? MAXF * 0.55 : MAXF;
   if (up) c.speed += (c.speed < 0 ? BRAKE : ACCEL) * dt;
   else if (down) c.speed -= (c.speed > 5 ? BRAKE : ACCEL * 0.6) * dt;
   else { const d = Math.min(Math.abs(c.speed), DRAG * dt); c.speed -= Math.sign(c.speed) * d; }
-  if (hand) { const d = Math.min(Math.abs(c.speed), HAND_DECEL * dt); c.speed -= Math.sign(c.speed) * d; }
   if (onWalk && c.speed > maxF) c.speed = Math.max(maxF, c.speed - 200 * dt);
   c.speed = Math.max(MAXR, Math.min(MAXF, c.speed));
+  { // how much the tyres slip: hard braking, fast corners, sliding after a hit, spinning
+    const sp = Math.abs(c.speed); let slip = 0;
+    if (down && c.speed > 30) slip = Math.max(slip, Math.min(1, (c.speed - 10) / 70));
+    if (steer && sp > 85) slip = Math.max(slip, Math.min(1, (sp - 85) / 60));
+    if (c.kx || c.ky) slip = Math.max(slip, Math.min(1, Math.hypot(c.kx, c.ky) / 80));
+    if (Math.abs(c.spin || 0) > 40) slip = Math.max(slip, Math.min(1, Math.abs(c.spin) / 150));
+    c.slip = c.hp > 0 ? slip : 0;
+  }
   const k = Math.min(1, Math.abs(c.speed) / 50);
-  const nh = c.heading + steer * TURN * (hand ? 1.35 : 1) * k * (c.speed < 0 ? -1 : 1) * dt;
-  let dth = 0;
-  if (!carBlocked(map, c.x, c.y, nh)) { dth = rad(nh - c.heading); c.heading = nh; }
+  const nh = c.heading + steer * TURN * k * (c.speed < 0 ? -1 : 1) * dt;
+  if (!carBlocked(map, c.x, c.y, nh)) c.heading = nh;
   c.heading = ((c.heading % 360) + 360) % 360;
-  // the velocity vector keeps its direction while the car turns under it: rotate it into the new frame, then let the tyres pull the sideways part back
-  c.vl = c.vl || 0;
-  if (dth) { const vf = c.speed, vl = c.vl; c.speed = vf * Math.cos(dth) - vl * Math.sin(dth); c.vl = vf * Math.sin(dth) + vl * Math.cos(dth); }
-  c.vl *= Math.exp(-(hand ? GRIP_HAND : GRIP) * dt); c.vl = Math.max(-140, Math.min(140, c.vl)); if (Math.abs(c.vl) < 0.5) c.vl = 0;
-  const [fx, fy] = fwd(c.heading), [sx, sy] = side(c.heading);
-  const mx = (fx * c.speed + sx * c.vl) * dt, my = (fy * c.speed + sy * c.vl) * dt, v0 = Math.hypot(c.speed, c.vl), sg = Math.sign(c.speed) || 1;
+  const [fx, fy] = fwd(c.heading), mx = fx * c.speed * dt, my = fy * c.speed * dt, v0 = Math.abs(c.speed), sg = Math.sign(c.speed) || 1;
   const bump = k => { if (v0 > 45) c.bump = { v: v0 * k, x: c.x + fx * HL * sg, y: c.y + fy * HL * sg }; };   // game reads this to spawn sparks / shake
   if (!carBlocked(map, c.x + mx, c.y + my, c.heading)) { c.x += mx; c.y += my; }
-  else if (!carBlocked(map, c.x + mx, c.y, c.heading)) { c.x += mx; c.speed *= 0.9; c.vl *= 0.7; bump(0.5); }
-  else if (!carBlocked(map, c.x, c.y + my, c.heading)) { c.y += my; c.speed *= 0.9; c.vl *= 0.7; bump(0.5); }
-  else { c.speed = Math.abs(c.speed) > 25 ? -c.speed * 0.25 : 0; c.vl = 0; bump(1); }
+  else if (!carBlocked(map, c.x + mx, c.y, c.heading)) { c.x += mx; c.speed *= 0.9; bump(0.5); }
+  else if (!carBlocked(map, c.x, c.y + my, c.heading)) { c.y += my; c.speed *= 0.9; bump(0.5); }
+  else { c.speed = Math.abs(c.speed) > 25 ? -c.speed * 0.25 : 0; bump(1); }
   // knock-back from collisions: sideways slide (tyre friction eats it quickly) and spin
   if (c.kx || c.ky) {
     const kx = c.kx * dt, ky = c.ky * dt;
@@ -59,10 +60,6 @@ export function stepCar(map, c, input, dt) {
     c.spin *= Math.exp(-5 * dt); if (Math.abs(c.spin) < 1) c.spin = 0;
   }
   c.anim = Math.round(c.heading / 22.5) % 16;
-  // tyre marks: sliding sideways, locked wheels under hard braking, or the handbrake
-  const slip = Math.abs(c.vl), lock = down && c.speed > LOCK_SPEED ? Math.min(1, (c.speed - LOCK_SPEED) / 70 + 0.3) : 0, hb = hand && Math.abs(c.speed) > 40 ? 0.7 : 0, sl = slip > SLIP_MARK ? Math.min(1, (slip - SLIP_MARK) / 50 + 0.3) : 0;
-  const a = Math.max(sl, lock, hb);
-  if (a > 0.05 && Math.hypot(c.x - x0, c.y - y0) > 0.2) c.mark = { x0, y0, h0, x1: c.x, y1: c.y, h1: c.heading, a, kind: lock >= sl && lock >= hb ? 'lock' : hb >= sl ? 'hand' : 'slip' };
   return c;
 }
 

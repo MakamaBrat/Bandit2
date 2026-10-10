@@ -13,11 +13,20 @@ export async function loadSprite(id, pal = 0) {
 }
 
 // flip: bit0 = mirror X, bit1 = mirror Y. Origin (x,y) is the frame anchor.
-export function drawFrame(ctx, spr, f, x, y, flip = 0) {
+const darkCache = new Map();
+// a burnt-out version of a frame (cached): the same pixels, darkened and a little warm
+function darkened(im) {
+  let d = darkCache.get(im); if (d) return d;
+  if (typeof document === 'undefined' || !im.width) return im;
+  d = document.createElement('canvas'); d.width = im.width; d.height = im.height; const g = d.getContext('2d');
+  g.drawImage(im, 0, 0); g.globalCompositeOperation = 'source-atop'; g.fillStyle = 'rgba(14,10,8,0.68)'; g.fillRect(0, 0, d.width, d.height);
+  darkCache.set(im, d); return d;
+}
+export function drawFrame(ctx, spr, f, x, y, flip = 0, dark = false) {
   const im = spr.frames[f], m = spr.info.frames[f];
   if (!im || !m) return;
   ctx.save(); ctx.translate(x, y); ctx.scale(flip & 1 ? -1 : 1, flip & 2 ? -1 : 1);
-  ctx.drawImage(im, m.ox, m.oy); ctx.restore();
+  ctx.drawImage(dark ? darkened(im) : im, m.ox, m.oy); ctx.restore();
 }
 
 // Returns {frame, dx, dy, flip} for animation `a` at time t (ms), looping.

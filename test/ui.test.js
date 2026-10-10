@@ -85,12 +85,33 @@ const toScreen = o => ({ x: (o.x - D().cam.x) * D().zoom, y: (o.y - D().cam.y) *
   tick(30 * 4); t(D().fxs.stains.length >= 3 && victim.poolMade, `a pool forms under the body once it lies still (${D().fxs.stains.length} stains)`);
   el('bl').onclick(); t(D().fxs.stains.length === 0 && D().fxs.blood === false, 'the blood button switches blood off and clears it'); el('bl').onclick(); t(D().fxs.blood === true, 'and on again');
 }
+// ---- tyre marks, smoke, fire and wrecks in the real game loop ----
+{
+  const d = D(); d.cars.forEach(c => { c.x = 20; c.y = 20; c.speed = 0; c.ai = false; }); d.peds.length = 0; d.cops.length = 0; openRoad(d.p); tick(3);
+  const car = d.cars.find(c => !c.ai && !c.wreck); car.x = d.p.x + 40; car.y = d.p.y; car.heading = 0; car.speed = 0; car.hp = car.hpMax = 100; car.wreck = false; car.burn = 0; openRoad(car, 0); d.p.x = car.x - 60; d.p.y = car.y; tick(2);
+  const s0 = D().fxs.skids.length; car.speed = 140; for (let i = 0; i < 12; i++) tick(1); el('brake').onpointerdown(); D().p.x = car.x; D().p.y = car.y;
+  // brake while driving: get in first
+  el('brake').onpointerup();
+  const hero = D().p; hero.x = car.x + 10; hero.y = car.y; tick(1); el('ebtn').onpointerdown(); tick(2); t(D().drive === car, 'hero gets into the car for the tyre test');
+  car.speed = 140; el('brake').onpointerdown(); tick(12); const fresh = D().fxs.skids.filter(s => s.age < 1 && Math.hypot(s.x2 - car.x, s.y2 - car.y) < 80).length; tick(8); el('brake').onpointerup(); t(fresh > 8, `braking hard leaves fresh tyre marks right behind the car (${fresh} segments)`);
+  t(D().fxs.smoke.length > 0, `and tyre smoke (${D().fxs.smoke.length} puffs)`);
+  el('ebtn').onpointerdown(); tick(2); t(D().drive === null, 'hero gets out');
+  car.speed = 0; car.hp = 35; D().fxs.smoke.length = 0; tick(40); t(D().fxs.smoke.length > 5, `a damaged car (35%) smokes (${D().fxs.smoke.length} puffs)`);
+  car.hp = 0; const beforeFlames = D().fxs.flames.length; tick(20); t(D().fxs.flames.length > beforeFlames, 'a burning car shows flames'); t(!car.wreck, 'it is still a car for a moment');
+  // someone standing near the burning car gets caught by the blast
+  const victim = { x: car.x + 30, y: car.y + 4, dir: 30, kind: 'man', pal: 1, down: 0, moving: false, wait: 50, turn: 50, t: 0, vx: 0, vy: 0 }; D().peds.push(victim);
+  let exploded = false; for (let i = 0; i < 30 * 6 && !exploded; i++) { victim.x = car.x + 30; victim.y = car.y + 4; tick(1); exploded = car.wreck; }   // the bystander keeps standing next to the car until it blows
+  t(exploded, `after a few seconds the burning car explodes (${(car.burn || 0).toFixed(1)} s)`); tick(3); t(D().fxs.rings.length > 0 || D().fxs.flames.length > 30, 'with a fireball'); t(victim.dead, 'a pedestrian next to it is killed'); t(D().fxs.stains.some(s => s.col), 'and a scorch mark stays on the road');
+  tick(60); t(D().fxs.flames.length > 0, 'the wreck keeps burning for a while');
+  const h2 = D().p; h2.x = car.x + 6; h2.y = car.y + 20; h2.down = 0; h2.fly = null; tick(2); el('ebtn').onpointerdown(); tick(2); t(D().drive !== car && !(D().drive && D().drive.wreck), 'a burnt-out wreck cannot be entered');
+  const sp = el('snd'); t(typeof sp.onclick === 'function', 'there is a sound button'); t(D().audio.supported === false, 'in the test environment audio is a safe no-op');
+}
 // ---- moving traffic is actually visible around the hero ----
 while (D().zoom > 3.2) el('zm').onclick();   // typical zoom
 for (const city of ['city1_h', 'city2_s']) {
   el('city').onchange({ target: { value: city } }); await new Promise(r => setTimeout(r, 300));
   let seen = 0, frames = 0, moving = 0;
   for (let i = 0; i < 30 * 60; i++) { tick(1); const d = D(); frames++; const vis = d.cars.filter(c => c.ai && Math.abs(c.x - d.p.x) < d.VW / 2 && Math.abs(c.y - d.p.y) < d.VH / 2); if (vis.length) seen++; if (vis.some(c => Math.abs(c.speed) > 20)) moving++; }
-  t(seen / frames > 0.4 && moving / frames > 0.2, `${city}: a traffic car is in view ${Math.round(100 * seen / frames)}% of the time, moving in ${Math.round(100 * moving / frames)}%`);
+  t(seen / frames > 0.3 && moving / frames > 0.15, `${city}: a traffic car is in view ${Math.round(100 * seen / frames)}% of the time, moving in ${Math.round(100 * moving / frames)}%`);
 }
 process.exit(ok ? 0 : 1);

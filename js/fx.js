@@ -1,5 +1,5 @@
 // Effects: sparks and dust puffs (pure logic + a small draw helper).
-export const newFx = () => ({ sparks: [], puffs: [], shake: 0, drops: [], stains: [], blood: true });
+export const newFx = () => ({ sparks: [], puffs: [], shake: 0, drops: [], stains: [], blood: true, skids: [], smoke: [], flames: [], rings: [] });
 const MAX = 400;
 
 // A burst of sparks at (x, y). power ~ 0.3 (scrape) .. 1.5 (hard crash); (dx, dy) biases the direction (optional).
@@ -17,6 +17,7 @@ export function addPuff(fx, x, y, n = 5, rnd = Math.random) {
 export const shake = (fx, amp) => { fx.shake = Math.max(fx.shake, Math.min(10, amp)); };
 
 export function stepFx(fx, dt) {
+  stepFire(fx, dt);
   const damp = Math.exp(-3 * dt);
   for (const s of fx.sparks) { s.x += s.vx * dt; s.y += s.vy * dt; s.vx *= damp; s.vy *= damp; s.life -= dt; }
   for (const p of fx.puffs) { p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= damp; p.vy *= damp; p.r += 8 * dt; p.life -= dt; }
@@ -71,12 +72,67 @@ export function stepBlood(fx, dt) {
 export function drawStains(ctx, fx, camX, camY) {
   for (const s of fx.stains) {
     const alpha = s.age < 30 ? 0.85 : Math.max(0, 0.85 * (1 - (s.age - 30) / 30)), rnd = seeded(s.seed), cx = Math.round(s.x - camX), cy = Math.round(s.y - camY), R = Math.max(1, Math.round(s.r));
-    ctx.fillStyle = `rgba(110,8,8,${alpha.toFixed(2)})`;
+    const col = s.col || '110,8,8'; ctx.fillStyle = `rgba(${col},${alpha.toFixed(2)})`;
     ctx.fillRect(cx - R, cy - Math.max(1, Math.round(R * 0.6)), R * 2, Math.max(2, Math.round(R * 1.2)));
     for (let i = 0; i < 4; i++) { const ox = Math.round((rnd() - 0.5) * R * 2.4), oy = Math.round((rnd() - 0.5) * R * 1.4), w = 1 + Math.floor(rnd() * Math.max(1, R * 0.6)); ctx.fillRect(cx + ox - w, cy + oy, w * 2, Math.max(1, w)); }
-    ctx.fillStyle = `rgba(150,16,16,${(alpha * 0.8).toFixed(2)})`; ctx.fillRect(cx - Math.floor(R / 2), cy - 1, Math.max(1, R), 1);
+    if (!s.col) { ctx.fillStyle = `rgba(150,16,16,${(alpha * 0.8).toFixed(2)})`; ctx.fillRect(cx - Math.floor(R / 2), cy - 1, Math.max(1, R), 1); }
   }
 }
 export function drawDrops(ctx, fx, camX, camY) {
   for (const d of fx.drops) { ctx.fillStyle = d.life / d.max > 0.5 ? '#b01010' : '#7a0808'; ctx.fillRect(Math.round(d.x - camX), Math.round(d.y - camY), d.s, d.s); }
+}
+
+// ---- tyre marks, smoke, fire, explosions ----
+const MAX_SKIDS = 700;
+// call every frame for each car: lays black marks behind slipping wheels (rear pair, front pair too when slipping hard)
+export function skidStep(fx, c, wheelPos) {
+  const n = c.slip > 0.8 ? 4 : 2;
+  if (!(c.slip > 0.35)) { c.skidLast = null; return; }
+  const last = c.skidLast || (c.skidLast = []);
+  for (let i = 0; i < n; i++) {
+    const [x, y] = wheelPos[i], l = last[i];
+    if (l && Math.hypot(x - l[0], y - l[1]) < 14 && Math.hypot(x - l[0], y - l[1]) > 0.4) { fx.skids.push({ x1: l[0], y1: l[1], x2: x, y2: y, age: 0, a: Math.min(0.75, 0.3 + c.slip * 0.5) }); if (fx.skids.length > MAX_SKIDS) fx.skids.shift(); }
+    last[i] = [x, y];
+  }
+}
+// smoke puff: col = [r, g, b], a = starting opacity, rise = px/s upwards, grow = px/s
+export function addSmoke(fx, x, y, o = {}, rnd = Math.random) {
+  if (fx.smoke.length >= 320) return;
+  const life = (o.life || 0.9) * (0.7 + rnd() * 0.6);
+  fx.smoke.push({ x, y, vx: (rnd() - 0.5) * (o.spread ?? 14), vy: -(o.rise ?? 14) * (0.6 + rnd() * 0.8), life, max: life, r: o.r || 2, grow: o.grow ?? 8, col: o.col || [225, 225, 225], a: o.a ?? 0.45 });
+}
+export function addFlame(fx, x, y, o = {}, rnd = Math.random) {
+  if (fx.flames.length >= 320) return;
+  const life = (o.life || 0.5) * (0.6 + rnd() * 0.8);
+  fx.flames.push({ x: x + (rnd() - 0.5) * (o.w ?? 8), y, vx: (rnd() - 0.5) * (o.spread ?? 12), vy: -(o.rise ?? 40) * (0.6 + rnd() * 0.8), life, max: life, s: o.s || (rnd() < 0.4 ? 3 : 2) });
+}
+// tyre smoke from a wheel
+export const tyreSmoke = (fx, x, y, slip, rnd = Math.random) => addSmoke(fx, x, y, { r: 2, grow: 10, rise: 6, spread: 10, life: 0.8, a: 0.2 + 0.3 * slip, col: [235, 235, 235] }, rnd);
+// a big explosion: fireball, smoke column, sparks, a flash and a shock ring; leaves a scorch mark
+export function addExplosion(fx, x, y, rnd = Math.random) {
+  for (let i = 0; i < 46; i++) { const a = rnd() * Math.PI * 2, sp = 20 + rnd() * 95, life = 0.35 + rnd() * 0.55; if (fx.flames.length < 320) fx.flames.push({ x: x + Math.cos(a) * 3, y: y + Math.sin(a) * 2 - 4, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp * 0.7 - 25, life, max: life, s: rnd() < 0.5 ? 4 : 3 }); }
+  for (let i = 0; i < 16; i++) addSmoke(fx, x + (rnd() - 0.5) * 18, y + (rnd() - 0.5) * 8, { r: 4, grow: 16, rise: 26, spread: 30, life: 1.8, a: 0.7, col: [38, 36, 34] }, rnd);
+  addSparks(fx, x, y - 6, 1.6, 0, 0, rnd); shake(fx, 9);
+  fx.rings.push({ x, y, r: 6, life: 0.35, max: 0.35 });
+  fx.stains.push({ x, y: y + 3, r: 14, max: 14, grow: 0, age: 0, seed: Math.floor(rnd() * 1e6), col: '18,16,14' });
+}
+function stepFire(fx, dt) {
+  for (const s of fx.smoke) { s.x += s.vx * dt; s.y += s.vy * dt; s.vx *= Math.exp(-1.2 * dt); s.r += s.grow * dt; s.life -= dt; }
+  for (const s of fx.flames) { s.x += s.vx * dt; s.y += s.vy * dt; s.vx *= Math.exp(-2 * dt); s.life -= dt; }
+  for (const r of fx.rings) { r.r += 150 * dt; r.life -= dt; }
+  fx.smoke = fx.smoke.filter(s => s.life > 0); fx.flames = fx.flames.filter(s => s.life > 0); fx.rings = fx.rings.filter(r => r.life > 0);
+  for (const s of fx.skids) s.age += dt; fx.skids = fx.skids.filter(s => s.age < 25);
+}
+// ground layer (before the characters): tyre marks
+export function drawSkids(ctx, fx, camX, camY) {
+  ctx.lineWidth = 1.2; ctx.lineCap = 'round';
+  for (const s of fx.skids) { const a = s.age < 15 ? s.a : s.a * Math.max(0, 1 - (s.age - 15) / 10); ctx.strokeStyle = `rgba(14,14,14,${a.toFixed(2)})`; ctx.beginPath(); ctx.moveTo(s.x1 - camX, s.y1 - camY); ctx.lineTo(s.x2 - camX, s.y2 - camY); ctx.stroke(); }
+}
+// air layer (over the characters): smoke, then fire
+export function drawFire(ctx, fx, camX, camY) {
+  for (const s of fx.smoke) { const a = s.a * s.life / s.max; ctx.fillStyle = `rgba(${s.col[0]},${s.col[1]},${s.col[2]},${a.toFixed(2)})`; ctx.fillRect(Math.round(s.x - camX - s.r / 2), Math.round(s.y - camY - s.r / 2), Math.max(1, Math.round(s.r)), Math.max(1, Math.round(s.r))); }
+  for (const r of fx.rings) { ctx.strokeStyle = `rgba(255,235,190,${(0.7 * r.life / r.max).toFixed(2)})`; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(r.x - camX, r.y - camY, r.r, 0, Math.PI * 2); ctx.stroke(); }
+  const prev = ctx.globalCompositeOperation; ctx.globalCompositeOperation = 'lighter';
+  for (const s of fx.flames) { const t = s.life / s.max; ctx.fillStyle = t > 0.66 ? '#fff0a0' : t > 0.33 ? '#ffa426' : '#d93a14'; const z = Math.max(1, Math.round(s.s * (0.5 + 0.5 * t))); ctx.fillRect(Math.round(s.x - camX - z / 2), Math.round(s.y - camY - z / 2), z, z); }
+  ctx.globalCompositeOperation = prev;
 }
