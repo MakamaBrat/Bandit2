@@ -54,7 +54,7 @@ cv.addEventListener('pointerup', pend); cv.addEventListener('pointercancel', pen
 cv.addEventListener('wheel', e => { e.preventDefault(); setZoom(zoom * (e.deltaY < 0 ? 1.15 : 1 / 1.15)); }, { passive: false });
 const pointerInput = () => {
   const i = {}; if (!aim) return i; const w = world(aim);
-  if (drive) { const [sx, sy] = side(drive.heading), r = (w.x - drive.x) * sx + (w.y - drive.y) * sy; if (r > 10) i.right = true; else if (r < -10) i.left = true; return i; }   // touch right/left of the car's body = steer that way; gas and brake are separate buttons
+  if (drive) { if (aim.x < innerWidth / 2) i.left = true; else i.right = true; return i; }   // in a car: left half of the screen steers left, right half steers right (screen based, not relative to the car); gas and brake are the two pedal buttons
   const dx = w.x - p.x, dy = w.y - (p.y - 12); i.run = true;
   if (Math.hypot(dx, dy) < 8) return {};
   if (Math.abs(dx) > Math.abs(dy)) i[dx < 0 ? 'left' : 'right'] = true; else i[dy < 0 ? 'up' : 'down'] = true;
@@ -195,7 +195,7 @@ function frame(now) {
   if (p.dead) { ctx.fillStyle = 'rgba(0,0,0,.45)'; ctx.fillRect(0, 0, VW, VH); ctx.fillStyle = '#e33'; ctx.font = 'bold 20px monospace'; ctx.fillText('WASTED', VW / 2 - 40, VH / 2); ctx.font = '8px monospace'; }
   const near = !drive && nearestCar(cars, p);
   if (!drive) { ctx.fillStyle = '#fff'; ctx.fillText(WEAPONS[p.weapon].name + ' (Q)', 4, 10); }
-  hint = drive ? 'E — выйти · ↑ газ · ↓ тормоз/назад · ←→ руль (или касание сбоку от машины)' : near ? 'E — сесть в машину' : 'Пробел — огонь · Q — оружие';
+  hint = drive ? 'E — выйти · ↑ газ · ↓ тормоз/назад · ←→ руль (или левая/правая половина экрана)' : near ? 'E — сесть в машину' : 'Пробел — огонь · Q — оружие';
   ctx.fillStyle = '#fff'; ctx.font = '8px monospace'; ctx.fillText(hint, 4, VH - 6);
   if (drive) ctx.fillText(Math.round(Math.abs(drive.speed)) + ' km/h', 4, 10);
   if (debug) {

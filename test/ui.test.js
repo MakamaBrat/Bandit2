@@ -51,19 +51,19 @@ const toScreen = o => ({ x: (o.x - D().cam.x) * D().zoom, y: (o.y - D().cam.y) *
   t(sat, 'tapping a car makes the hero walk to it and get in');
   tick(1); t(cls.has('driving'), 'pedal buttons are shown while in a car (body.driving)');
   t(openRoad(car, 0), 'found an open stretch of road for the driving checks'); tick(2);
-  // touching beside the car without a pedal does not move it
-  const x0 = car.x, y0 = car.y, h0 = car.heading, rel = (k) => { const sd = [Math.sin(car.heading * Math.PI / 180), Math.cos(car.heading * Math.PI / 180)]; return toScreen({ x: car.x + sd[0] * k, y: car.y + sd[1] * k }); };
-  { const s2 = rel(60); L.pointerdown({ pointerId: 1, clientX: s2.x, clientY: s2.y }); tick(40); L.pointerup({ pointerId: 1 }); }
+  // touching the screen without a pedal does not move the car
+  const x0 = car.x, y0 = car.y, h0 = car.heading, Wd = 1280, Hd = 720, ad = (a, b) => ((b - a + 540) % 360) - 180;
+  { L.pointerdown({ pointerId: 1, clientX: Wd * 0.75, clientY: Hd / 2 }); tick(40); L.pointerup({ pointerId: 1 }); }
   t(Math.hypot(car.x - x0, car.y - y0) < 5, 'touching the screen alone does not drive the car (gas is a separate button)');
-  // gas pedal + touch on the car's right side: drives and turns clockwise (heading decreases)
-  const ad = (a, b) => ((b - a + 540) % 360) - 180;
-  el('gas').onpointerdown(); { const s2 = rel(60); L.pointerdown({ pointerId: 1, clientX: s2.x, clientY: s2.y }); } tick(45); 
-  const h1 = car.heading; L.pointerup({ pointerId: 1 }); el('gas').onpointerup();
-  t(Math.hypot(car.x - x0, car.y - y0) > 20, `gas button drives the car (${Math.round(Math.hypot(car.x - x0, car.y - y0))}px)`);
-  t(ad(h0, h1) < -5, `touch on the car's right side steers right (heading ${Math.round(h0)} -> ${Math.round(h1)})`);
-  // left side steers the other way (steering is relative to the car's own orientation, whatever way it points)
-  { openRoad(car, 90); tick(2); const h2 = car.heading; el('gas').onpointerdown(); const s3 = rel(-60); L.pointerdown({ pointerId: 1, clientX: s3.x, clientY: s3.y }); tick(45); const h3 = car.heading; L.pointerup({ pointerId: 1 }); el('gas').onpointerup();
-    t(ad(h2, h3) > 5, `touch on the car's left side steers left (heading ${Math.round(h2)} -> ${Math.round(h3)})`); }
+  // gas pedal + touch on the RIGHT half of the screen: drives and turns right (heading decreases), whichever way the car points
+  for (const startHeading of [0, 90, 180, 270]) {
+    openRoad(car, startHeading); tick(2); const hs = car.heading, px = car.x, py = car.y;
+    el('gas').onpointerdown(); L.pointerdown({ pointerId: 1, clientX: Wd * 0.8, clientY: Hd * 0.3 }); tick(40); const h1 = car.heading; L.pointerup({ pointerId: 1 }); el('gas').onpointerup();
+    t(Math.hypot(car.x - px, car.y - py) > 15 && ad(hs, h1) < -5, `facing ${startHeading}: right half of the screen steers right (heading ${Math.round(hs)} -> ${Math.round(h1)})`);
+    openRoad(car, startHeading); tick(2); const hl = car.heading;
+    el('gas').onpointerdown(); L.pointerdown({ pointerId: 1, clientX: Wd * 0.2, clientY: Hd * 0.7 }); tick(40); const h2 = car.heading; L.pointerup({ pointerId: 1 }); el('gas').onpointerup();
+    t(ad(hl, h2) > 5, `facing ${startHeading}: left half of the screen steers left (heading ${Math.round(hl)} -> ${Math.round(h2)})`);
+  }
   // brake pedal slows / reverses
   { openRoad(car, 180); tick(2); el('gas').onpointerdown(); tick(30); el('gas').onpointerup(); const v = car.speed; el('brake').onpointerdown(); tick(40); el('brake').onpointerup(); t(car.speed < v - 40, `brake button slows the car (${Math.round(v)} -> ${Math.round(car.speed)})`); }
 }

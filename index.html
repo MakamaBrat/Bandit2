@@ -10,10 +10,12 @@
  #top{left:calc(6px + env(safe-area-inset-left));top:calc(6px + env(safe-area-inset-top))}
  #btns{right:calc(10px + env(safe-area-inset-right));bottom:calc(14px + env(safe-area-inset-bottom));flex-direction:column-reverse}
  button,select{font:inherit;color:#fff;background:rgba(20,20,30,.55);border:1px solid rgba(255,255,255,.35);border-radius:10px;padding:4px 10px;touch-action:none}
- #btns button,#pedals button{width:60px;height:60px;font-size:22px;border-radius:50%}
- #pedals{display:none;left:calc(12px + env(safe-area-inset-left));bottom:calc(14px + env(safe-area-inset-bottom));flex-direction:column;gap:14px}
- body.driving #pedals{display:flex} body.driving .foot{display:none}
- #gas{width:76px!important;height:76px!important;font-size:30px!important;background:rgba(40,140,60,.6)} #brake{background:rgba(170,40,40,.6)}
+ #btns button{width:60px;height:60px;font-size:22px;border-radius:50%}
+ .pedal{position:fixed;display:none;z-index:2;width:88px;height:88px;font-size:34px;border-radius:50%}
+ body.driving .pedal{display:block} body.driving .foot{display:none}
+ #gas{right:calc(14px + env(safe-area-inset-right));bottom:calc(14px + env(safe-area-inset-bottom));background:rgba(40,140,60,.6)}
+ #brake{left:calc(14px + env(safe-area-inset-left));bottom:calc(14px + env(safe-area-inset-bottom));background:rgba(170,40,40,.6)}
+ body.driving #btns{bottom:calc(116px + env(safe-area-inset-bottom))}
  #top button{min-width:36px;height:34px}
  #info{position:fixed;left:6px;bottom:calc(22px + env(safe-area-inset-bottom));font:11px monospace;color:#9f9;z-index:2;pointer-events:none}
  a{color:#8cf}
@@ -25,7 +27,8 @@
  <a href="viewer.html">спрайты</a>
 </div>
 <div id="btns" class="ui"><button data-k="fire" class="foot">🔫</button><button id="qbtn" class="foot">Q</button><button id="ebtn">E</button></div>
-<div id="pedals" class="ui"><button id="gas" data-k="up" title="Газ">⛽</button><button id="brake" data-k="down" title="Тормоз / назад">🛑</button></div>
+<button id="gas" class="pedal" data-k="up" title="Газ (справа)">⛽</button>
+<button id="brake" class="pedal" data-k="down" title="Тормоз / назад (слева)">🛑</button>
 <div id="info"></div>
 <script type="module" src="js/game.js"></script>
 </body></html>
