@@ -5,7 +5,7 @@ import { spawnPeds, stepPed, pedAnim, topUpPeds } from './ped.js';
 import { spawnTraffic, stepTraffic, topUpTraffic, managePoliceCars } from './traffic.js';
 import { carHits, carVsCar, keepOutOfCars, flyStep } from './collide.js';
 import { newFx, addSparks, addPuff, stepFx, drawFx, shake } from './fx.js';
-import { newCop, stepCop, copAnim, newWanted, addHeat, stars, stepWanted, manageCops, hurtHero, reviveHero, HERO_HP } from './police.js';
+import { newCop, stepCop, copAnim, copAnimTime, newWanted, addHeat, stars, stepWanted, manageCops, hurtHero, reviveHero, HERO_HP } from './police.js';
 import { findSpawn } from './player.js';
 import { WEAPONS, arm, nextWeapon, stepArm, fire, armAnim, stepBullets, scare } from './weapons.js';
 const cv = document.getElementById('c'), ctx = cv.getContext('2d'), $ = id => document.getElementById(id);
@@ -135,7 +135,7 @@ function frame(now) {
   const aa = !drive && armAnim(p), ai = aa || animIndex(p), a = animAt(hero, ai, aa ? p.since * 1000 : p.t * 1000);
   const items = cars.map(c => ({ y: c.y, draw: () => { const spr = carSpr[c.type], an = spr.info.animations[c.anim][0]; drawFrame(ctx, spr, an.frame, c.x - cam.x, c.y - cam.y, an.flip); } }));
   for (const q of peds) items.push({ y: q.y + 1, draw: () => { const s = q.kind === 'woman' ? hero : heroPal[q.pal], a = animAt(s, pedAnim(q), q.t * 1000); if (a) drawBody(s, a, q.x - cam.x, q.y - cam.y, q.fly); } });
-  for (const c of cops) items.push({ y: c.y + 1, draw: () => { const k = copAnim(c), a = animAt(hero, k, (c.since < 0.6 ? c.since : c.t) * 1000); if (a) drawFrame(ctx, hero, a.frame, c.x - cam.x + a.dx, c.y - cam.y + a.dy, a.flip); } });
+  for (const c of cops) items.push({ y: c.y + 1, draw: () => { const k = copAnim(c), a = animAt(hero, k, copAnimTime(c) * 1000); if (a) drawFrame(ctx, hero, a.frame, c.x - cam.x + a.dx, c.y - cam.y + a.dy, a.flip); } });
   if (!drive) items.push({ y: p.y + 1, draw: () => { if (a) drawBody(hero, a, sx, sy, p.fly); } });
   items.sort((u, v) => u.y - v.y).forEach(i => i.draw());
   drawFx(ctx, fxs, cam.x, cam.y);
