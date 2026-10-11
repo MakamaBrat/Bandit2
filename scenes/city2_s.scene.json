@@ -1,0 +1,53 @@
+{
+ "map": "city2_s",
+ "objects": [
+  {
+   "id": 1,
+   "name": "Hero (1)",
+   "kind": "player",
+   "prefab": "Hero",
+   "spr": "i_00",
+   "pal": 0,
+   "anim": 90,
+   "flip": 0,
+   "x": 2749,
+   "y": 2845
+  },
+  {
+   "id": 2,
+   "name": "PoliceCar (2)",
+   "kind": "car",
+   "prefab": "PoliceCar",
+   "spr": "k_00",
+   "pal": 0,
+   "anim": 0,
+   "flip": 0,
+   "x": 2809,
+   "y": 2845
+  },
+  {
+   "id": 3,
+   "name": "Pedestrian (3)",
+   "kind": "ped",
+   "prefab": "Pedestrian",
+   "spr": "i_00",
+   "pal": 1,
+   "anim": 90,
+   "flip": 0,
+   "x": 2709,
+   "y": 2875
+  },
+  {
+   "id": 4,
+   "name": "Cop (4)",
+   "kind": "cop",
+   "prefab": "Cop",
+   "spr": "i_00",
+   "pal": 0,
+   "anim": 164,
+   "flip": 0,
+   "x": 2749,
+   "y": 2795
+  }
+ ]
+}
