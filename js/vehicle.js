@@ -3,7 +3,27 @@
 import { blockedAt } from './player.js';
 export const CAR_SPRITES = ['k_00', 'k_01', 'k_02', 'k_03', 'k_04'];
 export const HL = 34, HW = 15;               // half length / half width of the collision box (px); the car art is ~72-86 x 33-41
-const ACCEL = 170, BRAKE = 320, DRAG = 55, MAXF = 150, MAXR = -50, TURN = 120;
+const BRAKE = 320, DRAG = 55, MAXF = 150, MAXR = -50, TURN = 120, REV_ACCEL = 100;
+// Automatic 5-speed gearbox: each gear covers a speed range [lo, hi] (px/s) with its own pull; the engine revs (0..1) climb inside the gear and drop at a shift.
+export const GEARS = [{ lo: 0, hi: 38, acc: 150 }, { lo: 30, hi: 66, acc: 122 }, { lo: 56, hi: 96, acc: 94 }, { lo: 84, hi: 124, acc: 74 }, { lo: 110, hi: 150, acc: 58 }];
+export const SHIFT_UP = 0.16, SHIFT_DOWN = 0.09, IDLE_RPM = 0.2;
+export const kmh = speed => Math.round(Math.abs(speed) * 0.9);                    // speedometer: 150 px/s (top speed) = 135 km/h
+export const gearLabel = c => c.gear < 0 ? 'R' : Math.abs(c.speed) < 1.5 && !c.rpmUp ? 'N' : String(c.gear || 1);
+// gear + revs for the current speed. up = throttle pressed. Returns true while the gearbox is mid-shift (no pull).
+export function gearbox(c, up, dt) {
+  c.shiftT = Math.max(0, (c.shiftT || 0) - dt);
+  if (c.speed < -1) { c.gear = -1; c.rpm += (IDLE_RPM + (1 - IDLE_RPM) * Math.min(1, -c.speed / -MAXR) - c.rpm) * Math.min(1, dt * 10); return false; }
+  if (!(c.gear > 0)) c.gear = 1;
+  if (!c.shiftT) {
+    const g = GEARS[c.gear - 1];
+    if (c.gear < 5 && c.speed > g.hi - 1.5 && up) { c.gear++; c.shiftT = SHIFT_UP; c.shifted = 'up'; }
+    else if (c.gear > 1 && c.speed < g.lo - 3) { c.gear--; c.shiftT = SHIFT_DOWN; c.shifted = 'down'; }
+  }
+  const g = GEARS[c.gear - 1], lo = c.gear === 1 ? 0 : g.lo, f = Math.max(0, Math.min(1, (c.speed - lo) / (g.hi - lo)));
+  const target = IDLE_RPM + (1 - IDLE_RPM) * f + (up && c.shiftT === 0 ? 0.04 : 0);
+  c.rpm = (c.rpm ?? IDLE_RPM) + (target - (c.rpm ?? IDLE_RPM)) * Math.min(1, dt * (c.shiftT > 0 ? 7 : 16));
+  c.rpmUp = up; return c.shiftT > 0;
+}
 const rad = d => d * Math.PI / 180;
 export const fwd = h => [Math.cos(rad(h)), -Math.sin(rad(h))];
 export const side = h => [Math.sin(rad(h)), Math.cos(rad(h))];
@@ -15,7 +35,7 @@ export function samples(x, y, h) {
 }
 export const carBlocked = (map, x, y, h) => samples(x, y, h).some(([px, py]) => map.tileAt(px, py).collision === 2);
 
-export function newCar(type, x, y, heading) { return { type, x, y, heading, speed: 0, driver: false, anim: 0, hp: 100, hpMax: 100, slip: 0 }; }
+export function newCar(type, x, y, heading) { return { type, x, y, heading, speed: 0, driver: false, anim: 0, hp: 100, hpMax: 100, slip: 0, gear: 1, rpm: 0.2 }; }
 // wheel contact points (rear pair first, then the front pair)
 export function wheels(c) {
   const [fx, fy] = fwd(c.heading), [sx, sy] = side(c.heading), l = HL * 0.55, w = HW * 0.75;
@@ -26,8 +46,9 @@ export function stepCar(map, c, input, dt) {
   const up = !!input.up, down = !!input.down, steer = (input.left ? 1 : 0) - (input.right ? 1 : 0);
   const onWalk = map.tileAt(c.x, c.y).collision === 1;
   const maxF = onWalk ? MAXF * 0.55 : MAXF;
-  if (up) c.speed += (c.speed < 0 ? BRAKE : ACCEL) * dt;
-  else if (down) c.speed -= (c.speed > 5 ? BRAKE : ACCEL * 0.6) * dt;
+  const shifting = gearbox(c, up, dt);
+  if (up) c.speed += (c.speed < 0 ? BRAKE : shifting ? 0 : GEARS[Math.max(0, c.gear - 1)].acc) * dt;
+  else if (down) c.speed -= (c.speed > 5 ? BRAKE : REV_ACCEL) * dt;
   else { const d = Math.min(Math.abs(c.speed), DRAG * dt); c.speed -= Math.sign(c.speed) * d; }
   if (onWalk && c.speed > maxF) c.speed = Math.max(maxF, c.speed - 200 * dt);
   c.speed = Math.max(MAXR, Math.min(MAXF, c.speed));

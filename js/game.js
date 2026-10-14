@@ -1,11 +1,13 @@
 import { loadMap, loadSprite, drawMap, drawFrame, animAt } from './engine.js';
 import { newPlayer, step, animIndex, DIR } from './player.js';
 import { lyingPose, facingOf } from './lying.js';
-import { spawnCars, stepCar, nearestCar, exitSpot, carDist, side, wheels, CAR_SPRITES } from './vehicle.js';
+import { spawnCars, stepCar, nearestCar, exitSpot, carDist, side, wheels, kmh, gearLabel, CAR_SPRITES } from './vehicle.js';
 import { spawnPeds, stepPed, pedAnim, topUpPeds } from './ped.js';
 import { spawnTraffic, stepTraffic, topUpTraffic, managePoliceCars } from './traffic.js';
 import { carHits, carVsCar, keepOutOfCars, flyStep, launchBody } from './collide.js';
 import { createAudio, attenuation } from './audio.js';
+import { drawStars, drawAlertEdge } from './hud.js';
+import { drawPoliceLights, lightsOn } from './lights.js';
 import { damageCar, damageFromCrash, damageFromWall, stepCarFire, explode, isUsable, burning } from './damage.js';
 import { newFx, addSparks, addPuff, stepFx, drawFx, shake, addBlood, addPool, smear, stepBlood, drawStains, drawDrops, skidStep, tyreSmoke, addSmoke, addFlame, addExplosion, drawSkids, drawFire } from './fx.js';
 import { newCop, stepCop, copAnim, copAnimTime, newWanted, addHeat, stars, stepWanted, manageCops, hurtHero, reviveHero, HERO_HP } from './police.js';
@@ -17,17 +19,19 @@ function resize() { VW = Math.ceil(innerWidth / zoom); VH = Math.ceil(innerHeigh
 function setZoom(z) { zoom = Math.max(1, Math.min(8, z)); try { localStorage.setItem('zoom', zoom); } catch (e) {} resize(); }
 { let z = NaN; try { z = parseFloat(localStorage.getItem('zoom')); } catch (e) {} zoom = z >= 1 && z <= 8 ? z : Math.max(2, Math.min(4, Math.round(Math.min(innerWidth, innerHeight) / 200))); resize(); }
 addEventListener('resize', resize);
-let soundOff = false; try { soundOff = localStorage.getItem('sound') === '0'; } catch (e) {}
-const audio = createAudio(globalThis, soundOff);
+let soundOff = false, musicOff = false; try { soundOff = localStorage.getItem('sound') === '0'; musicOff = localStorage.getItem('music') === '0'; } catch (e) {}
+const audio = createAudio(globalThis, soundOff, !musicOff);
 const unlockAudio = () => audio.unlock(); addEventListener('pointerdown', unlockAudio); addEventListener('keydown', unlockAudio);
 function toggleSound() { const m = audio.toggle(); try { localStorage.setItem('sound', m ? '0' : '1'); } catch (e) {} $('snd').textContent = m ? '🔇' : '🔊'; }
 const fxs = newFx();
+function toggleMusic() { const on = audio.toggleMusic(); try { localStorage.setItem('music', on ? '1' : '0'); } catch (e) {} $('mus').style.opacity = on ? '1' : '0.45'; }
+let clock = 0, lastStars = 0, starFlash = 0;
 try { if (localStorage.getItem('blood') === '0') fxs.blood = false; } catch (e) {}
 function toggleBlood() { fxs.blood = !fxs.blood; if (!fxs.blood) { fxs.stains.length = 0; fxs.drops.length = 0; } try { localStorage.setItem('blood', fxs.blood ? '1' : '0'); } catch (e) {} }
 let rammed = 0, cops = [], wanted = newWanted(), wastedT = -1, bullets = [], map, hero, heroPal = {}, peds = [], p, cam = { x: 0, y: 0 }, debug = false, cars = [], carSpr = {}, drive = null, hint = '';
 const keys = {};
 const map_ = { ArrowLeft: 'left', a: 'left', ArrowRight: 'right', d: 'right', ArrowUp: 'up', w: 'up', ArrowDown: 'down', s: 'down', left: 'left', right: 'right', up: 'up', down: 'down' };
-addEventListener('keydown', e => { keys[e.key.toLowerCase()] = keys[e.key] = true; if (e.key === 'f') debug = !debug; if ((e.key === 'e' || e.key === 'E') && !e.repeat) toggleCar(); if ((e.key === 'q' || e.key === 'Q') && !e.repeat && !drive) nextWeapon(p); if ((e.key === 'b' || e.key === 'B') && !e.repeat) toggleBlood(); if ((e.key === 'm' || e.key === 'M') && !e.repeat) toggleSound(); if (e.key.startsWith('Arrow') || e.key === ' ') e.preventDefault(); });
+addEventListener('keydown', e => { keys[e.key.toLowerCase()] = keys[e.key] = true; if (e.key === 'f') debug = !debug; if ((e.key === 'e' || e.key === 'E') && !e.repeat) toggleCar(); if ((e.key === 'q' || e.key === 'Q') && !e.repeat && !drive) nextWeapon(p); if ((e.key === 'b' || e.key === 'B') && !e.repeat) toggleBlood(); if ((e.key === 'm' || e.key === 'M') && !e.repeat) toggleSound(); if ((e.key === 'n' || e.key === 'N') && !e.repeat) toggleMusic(); if (e.key.startsWith('Arrow') || e.key === ' ') e.preventDefault(); });
 addEventListener('keyup', e => { keys[e.key.toLowerCase()] = keys[e.key] = false; });
 const input = () => { const i = { run: !!(keys.Shift || keys.shift) }; for (const k in map_) if (keys[k]) i[map_[k]] = true; return i; };
 // ---- pointer / touch: hold left/right/above/below the hero to run that way (any direction for a car), tap a car to get in, wheel / pinch to zoom ----
@@ -77,13 +81,13 @@ function toggleCar() {
   if (drive) { const sp = exitSpot(map, drive); if (!sp) return; p.x = sp.x; p.y = sp.y; drive.speed = 0; drive = null; return; }
   const c = nearestCar(cars.filter(isUsable), p); if (c) { drive = c; c.ai = false; }
 }
-async function start(tag) { map = await loadMap(tag); p = arm(newPlayer(map)); p.hp = HERO_HP; bullets = []; cops = []; wanted = newWanted(); wastedT = -1; drive = null; cars = [...spawnCars(map, p, 5), ...spawnTraffic(map, p, 6)]; topUpTraffic(map, p, cars, 8, Math.random, 60, 260); peds = spawnPeds(map, p, 14); }
+async function start(tag) { map = await loadMap(tag); p = arm(newPlayer(map)); p.hp = HERO_HP; bullets = []; cops = []; wanted = newWanted(); wastedT = -1; lastStars = 0; starFlash = 0; drive = null; cars = [...spawnCars(map, p, 5), ...spawnTraffic(map, p, 6)]; topUpTraffic(map, p, cars, 8, Math.random, 60, 260); peds = spawnPeds(map, p, 14); }
 $('city').onchange = e => start(e.target.value);
 // touch / on-screen buttons
 document.querySelectorAll('[data-k]').forEach(b => { const k = b.dataset.k; b.onpointerdown = () => keys[k] = true; b.onpointerup = b.onpointerleave = b.onpointercancel = () => keys[k] = false; });
 
 $('ebtn').onpointerdown = toggleCar;
-$('bl').onclick = toggleBlood; $('snd').onclick = toggleSound; $('snd').textContent = audio.muted ? '🔇' : '🔊';
+$('bl').onclick = toggleBlood; $('snd').onclick = toggleSound; $('mus').onclick = toggleMusic; $('mus').style.opacity = audio.musicOn ? '1' : '0.45'; $('snd').textContent = audio.muted ? '🔇' : '🔊';
 $('zp').onclick = () => setZoom(zoom * 1.25); $('zm').onclick = () => setZoom(zoom / 1.25);
 $('fs').onclick = () => { const el = document.documentElement; try { if (document.fullscreenElement || document.webkitFullscreenElement) (document.exitFullscreen || document.webkitExitFullscreen).call(document); else (el.requestFullscreen || el.webkitRequestFullscreen).call(el); } catch (e) {} };
 $('city').onfocus = () => { for (const k in keys) keys[k] = false; };
@@ -112,7 +116,7 @@ function drawBody(spr, a, x, y, fly, xor = 0) {
   ctx.fillStyle = 'rgba(0,0,0,' + Math.max(0.12, 0.35 - fly.z * 0.006).toFixed(2) + ')'; ctx.beginPath(); ctx.ellipse(x, y, Math.max(3, 8 - fly.z * 0.08), 3, 0, 0, Math.PI * 2); ctx.fill();
   ctx.save(); ctx.translate(x, y - fly.z - 10); ctx.rotate(fly.rot); drawFrame(ctx, spr, a.frame, a.dx, a.dy + 10, a.flip ^ xor); ctx.restore();
 }
-globalThis.__dbg = () => ({ get drive() { return drive; }, cars, peds, cops, p, cam, zoom, VW, VH, map, fxs, audio });
+globalThis.__dbg = () => ({ get drive() { return drive; }, cars, peds, cops, p, cam, zoom, VW, VH, map, fxs, audio, keys, get stars() { return lastStars; }, get wanted() { return wanted; }, get flash() { return starFlash; }, reset() { lastStars = 0; starFlash = 0; drive = null; cops.length = 0; wanted.heat = 0; Object.assign(p, { hp: HERO_HP, dead: false, down: 0, fly: null }); wastedT = -1; peds.length = 0; cars = cars.filter(c => !c.wreck && c.hp > 0); } });   // reset(): test hook, back to a calm world
 let last = performance.now();
 function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
@@ -169,7 +173,13 @@ function frame(now) {
   { // sound: engine of the hero's car, loudest tyre squeal / siren / fire near the hero
     let slipL = 0, sirenL = 0, fireL = 0;
     for (const c of cars) { const a = att(c.x, c.y); slipL = Math.max(slipL, c.slip * a); if (c.police && c.ai) sirenL = Math.max(sirenL, att(c.x, c.y, 600)); if (burning(c)) fireL = Math.max(fireL, att(c.x, c.y, 360)); }
-    audio.update({ driving: !!drive && !p.dead, throttle: !!inp.up, speed: drive ? drive.speed : 0, slip: slipL, siren: sirenL, fire: fireL });
+    let yelp = false; for (const c of cars) if (lightsOn(c) && Math.hypot(c.x - tx, c.y - ty) < 230) yelp = true;
+    audio.update({ driving: !!drive && !p.dead, throttle: !!inp.up, rpm: drive ? drive.rpm : 0, slip: slipL, siren: sirenL, yelp, fire: fireL });
+  }
+  { // wanted level: jingle + alarm flash when it changes, music gets more intense with the stars
+    clock += dt; const sNow = stars(wanted);
+    if (sNow > lastStars) { audio.starUp(sNow); starFlash = 2.4; } else if (sNow < lastStars) { if (sNow === 0) audio.cleared(); else audio.starDown(); starFlash = Math.max(starFlash, 0.9); }
+    lastStars = sNow; starFlash = Math.max(0, starFlash - dt); audio.setIntensity(sNow / 3);
   }
   stepFx(fxs, dt); stepBlood(fxs, dt);
   for (const o of [...peds, ...cops, p]) {                                     // smears while a body slides, a pool once it lies still
@@ -188,16 +198,16 @@ function frame(now) {
   for (const c of cops) items.push({ y: c.y + 1, draw: () => { const lp = (c.dead || c.down > 0) ? lyingPose('cop', c.lie, facingOf(DIR, c.dir)) : null, k = lp ? lp.anim : copAnim(c), a = animAt(hero, k, copAnimTime(c) * 1000); if (a) drawBody(hero, a, c.x - cam.x, c.y - cam.y, c.fly, lp ? lp.xor : 0); } });
   if (!drive) items.push({ y: p.y + 1, draw: () => { if (a) drawBody(hero, a, sx, sy, p.fly, lpH ? lpH.xor : 0); } });
   items.sort((u, v) => u.y - v.y).forEach(i => i.draw());
-  drawFx(ctx, fxs, cam.x, cam.y); drawDrops(ctx, fxs, cam.x, cam.y); drawFire(ctx, fxs, cam.x, cam.y);
+  drawFx(ctx, fxs, cam.x, cam.y); drawDrops(ctx, fxs, cam.x, cam.y); drawFire(ctx, fxs, cam.x, cam.y); drawPoliceLights(ctx, cars, cam.x, cam.y, clock);
   ctx.fillStyle = '#ff0'; for (const b of bullets) ctx.fillRect(b.x - cam.x - 1, b.y - cam.y - 18, 2, 2);
   ctx.fillStyle = '#400'; ctx.fillRect(4, 14, 52, 5); ctx.fillStyle = '#e33'; ctx.fillRect(4, 14, 52 * Math.max(0, p.hp) / HERO_HP, 5);
-  ctx.fillStyle = '#fc0'; ctx.font = '10px monospace'; ctx.fillText('★'.repeat(stars(wanted)) + '☆'.repeat(3 - stars(wanted)), VW - 44, 12);
+  drawAlertEdge(ctx, VW, VH, starFlash, clock); drawStars(ctx, VW - 4, 4, stars(wanted), wanted.heat, starFlash, clock); ctx.font = '8px monospace';
   if (p.dead) { ctx.fillStyle = 'rgba(0,0,0,.45)'; ctx.fillRect(0, 0, VW, VH); ctx.fillStyle = '#e33'; ctx.font = 'bold 20px monospace'; ctx.fillText('WASTED', VW / 2 - 40, VH / 2); ctx.font = '8px monospace'; }
   const near = !drive && nearestCar(cars, p);
   if (!drive) { ctx.fillStyle = '#fff'; ctx.fillText(WEAPONS[p.weapon].name + ' (Q)', 4, 10); }
   hint = drive ? 'E — выйти · ↑ газ · ↓ тормоз/назад · ←→ руль (или левая/правая половина экрана)' : near ? 'E — сесть в машину' : 'Пробел — огонь · Q — оружие';
   ctx.fillStyle = '#fff'; ctx.font = '8px monospace'; ctx.fillText(hint, 4, VH - 6);
-  if (drive) ctx.fillText(Math.round(Math.abs(drive.speed)) + ' km/h', 4, 10);
+  if (drive) ctx.fillText(kmh(drive.speed) + ' km/h   ' + gearLabel(drive), 4, 10);
   if (debug) {
     ctx.fillStyle = 'rgba(255,0,0,.8)'; ctx.fillRect(sx - 1, sy - 1, 3, 3);
     const t = map.tileAt(p.x, p.y); $('info').textContent = `x ${(drive||p).x|0} y ${(drive||p).y|0} · тайл ${t.tile} · коллизия ${t.collision} · anim ${ai}`;

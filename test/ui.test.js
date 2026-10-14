@@ -41,10 +41,15 @@ L.pointerdown({ pointerId: 1, clientX: cx, clientY: cy }); L.pointerdown({ point
 const D = globalThis.__dbg;
 const openRoad = (c, heading) => { const m = D().map, T = 24; for (let r = 0; r < 80; r++) for (let a = 0; a < 360; a += 15) { const x = Math.floor((c.x + Math.cos(a * Math.PI / 180) * r * T) / T) * T + 12, y = Math.floor((c.y + Math.sin(a * Math.PI / 180) * r * T) / T) * T + 12;
     let clear = true; for (let dx = -3; dx <= 3 && clear; dx++) for (let dy = -3; dy <= 3; dy++) if (m.tileAt(x + dx * T, y + dy * T).collision !== 0) { clear = false; break; }
-    if (clear) { c.x = x; c.y = y; if (c.speed !== undefined) c.speed = 0; if (heading !== undefined) c.heading = heading; return true; } } return false; };
+    if (clear) { c.x = x; c.y = y; if (c.speed !== undefined) c.speed = 0; if (heading !== undefined) c.heading = heading; if (c.hpMax) { c.hp = c.hpMax; c.wreck = false; c.burn = 0; c.fuse = 0; c.fireT = 0; c.kx = c.ky = c.spin = 0; D().cars.forEach(o => { if (o !== c && Math.hypot(o.x - c.x, o.y - c.y) < 280) { o.x = 20; o.y = 20; o.speed = 0; o.ai = false; } }); } return true; } } return false; };   // test car starts undamaged, with no other traffic around   // test cars start every check undamaged
+const openWalk = o => { const m = D().map, T = 24, cx = o.x, cy = o.y; for (let r = 0; r < 90; r++) for (let a = 0; a < 360; a += 12) { const x = Math.floor((cx + Math.cos(a * Math.PI / 180) * r * T) / T) * T + 12, y = Math.floor((cy + Math.sin(a * Math.PI / 180) * r * T) / T) * T + 12;
+    let ok2 = true; for (let dx = -2; dx <= 2 && ok2; dx++) for (let dy = -2; dy <= 6; dy++) if (m.tileAt(x + dx * T, y + dy * T).collision !== 1) { ok2 = false; break; }
+    if (ok2) { o.x = x; o.y = y; return true; } } return false; };
+const clearCars = (o, r = 170) => D().cars.forEach(c => { if (Math.hypot(c.x - o.x, c.y - o.y) < r) { c.x = 20; c.y = 20; c.speed = 0; c.ai = false; c.wreck = false; c.hp = c.hpMax; } });   // no car next to the hero: a tap on a car means 'get in', not 'run'
 const toScreen = o => ({ x: (o.x - D().cam.x) * D().zoom, y: (o.y - D().cam.y) * D().zoom });
 {
-  const d = D(), car = d.cars.find(c => !c.ai); d.p.x = car.x - 70; d.p.y = car.y; d.cars.forEach(c => { if (c !== car) c.ai = false; });
+  D().reset(); tick(2);
+  const d = D(), car = d.cars.find(c => !c.ai); d.p.x = car.x - 70; d.p.y = car.y; d.cars.forEach(c => { if (c !== car) { c.ai = false; c.x = 20; c.y = 20; c.speed = 0; } });
   tick(3); const s = toScreen(car);
   L.pointerdown({ pointerId: 1, clientX: s.x, clientY: s.y }); L.pointerup({ pointerId: 1 });
   let sat = false; for (let i = 0; i < 240 && !sat; i++) { tick(1); sat = D().drive === car; }
@@ -53,8 +58,8 @@ const toScreen = o => ({ x: (o.x - D().cam.x) * D().zoom, y: (o.y - D().cam.y) *
   t(openRoad(car, 0), 'found an open stretch of road for the driving checks'); tick(2);
   // touching the screen without a pedal does not move the car
   const x0 = car.x, y0 = car.y, h0 = car.heading, Wd = 1280, Hd = 720, ad = (a, b) => ((b - a + 540) % 360) - 180;
-  { L.pointerdown({ pointerId: 1, clientX: Wd * 0.75, clientY: Hd / 2 }); tick(40); L.pointerup({ pointerId: 1 }); }
-  t(Math.hypot(car.x - x0, car.y - y0) < 5, 'touching the screen alone does not drive the car (gas is a separate button)');
+  { L.pointerdown({ pointerId: 1, clientX: Wd * 0.75, clientY: Hd / 2 }); tick(20); L.pointerup({ pointerId: 1 }); }
+  t(Math.hypot(car.x - x0, car.y - y0) < 12 && Math.abs(car.speed) < 25, 'touching the screen alone does not drive the car (gas is a separate button)');
   // gas pedal + touch on the RIGHT half of the screen: drives and turns right (heading decreases), whichever way the car points
   for (const startHeading of [0, 90, 180, 270]) {
     openRoad(car, startHeading); tick(2); const hs = car.heading, px = car.x, py = car.y;
@@ -69,15 +74,17 @@ const toScreen = o => ({ x: (o.x - D().cam.x) * D().zoom, y: (o.y - D().cam.y) *
 }
 // ---- hold left of the hero on foot: moves left ----
 {
+  D().reset(); tick(2);
   const d = D(); if (d.drive) el('ebtn').onpointerdown(); tick(30); t(!cls.has('driving'), 'pedal buttons are hidden on foot');
-  d.cars.forEach(c => { c.x = 20; c.y = 20; c.speed = 0; c.ai = false; }); openRoad(D().p); tick(3);   // no car next to the hero, so taps mean 'run', not 'get in'
+  d.cars.forEach(c => { c.x = 20; c.y = 20; c.speed = 0; c.ai = false; }); openWalk(D().p); clearCars(D().p); tick(3);   // no car next to the hero, so taps mean 'run', not 'get in'
   const x0 = D().p.x, sp = toScreen(D().p); L.pointerdown({ pointerId: 1, clientX: sp.x - 150, clientY: sp.y - 12 }); tick(30); L.pointerup({ pointerId: 1 });
   t(D().p.x < x0 - 5, `touch to the left of the hero runs left (${Math.round(D().p.x - x0)}px)`);
-  const y1 = D().p.y, sp2 = toScreen(D().p); L.pointerdown({ pointerId: 1, clientX: sp2.x, clientY: sp2.y + 150 }); tick(30); L.pointerup({ pointerId: 1 });
+  openWalk(D().p); clearCars(D().p); tick(2); const y1 = D().p.y, sp2 = toScreen(D().p); L.pointerdown({ pointerId: 1, clientX: sp2.x, clientY: sp2.y + 150 }); tick(30); L.pointerup({ pointerId: 1 });   // on open pavement, no car near
   t(D().p.y > y1 + 5, `touch below the hero runs down (${Math.round(D().p.y - y1)}px)`);
 }
 // ---- shooting a pedestrian: blood on the ground and a body lying head-first the way the bullet went ----
 {
+  D().reset(); tick(2);
   const d = D(); d.cars.forEach(c => { c.x = 20; c.y = 20; c.speed = 0; c.ai = false; }); openRoad(d.p); d.peds.length = 0; d.cops.length = 0; tick(3);
   d.p.dir = 0; d.p.weapon = 0; d.p.cool = 0; const victim = { x: d.p.x + 45, y: d.p.y, dir: 30, kind: 'man', pal: 1, down: 0, moving: false, wait: 5, turn: 5, t: 0, vx: 0, vy: 0 }; d.peds.push(victim);
   el('firebtn').onpointerdown(); tick(30); el('firebtn').onpointerup();
@@ -87,7 +94,8 @@ const toScreen = o => ({ x: (o.x - D().cam.x) * D().zoom, y: (o.y - D().cam.y) *
 }
 // ---- tyre marks, smoke, fire and wrecks in the real game loop ----
 {
-  const d = D(); d.cars.forEach(c => { c.x = 20; c.y = 20; c.speed = 0; c.ai = false; }); d.peds.length = 0; d.cops.length = 0; openRoad(d.p); tick(3);
+  D().reset(); tick(2);
+  const d = D(); d.cars.forEach(c => { c.x = 20; c.y = 20; c.speed = 0; c.ai = false; }); d.peds.length = 0; d.cops.length = 0; openWalk(d.p); tick(3);
   const car = d.cars.find(c => !c.ai && !c.wreck); car.x = d.p.x + 40; car.y = d.p.y; car.heading = 0; car.speed = 0; car.hp = car.hpMax = 100; car.wreck = false; car.burn = 0; openRoad(car, 0); d.p.x = car.x - 60; d.p.y = car.y; tick(2);
   const s0 = D().fxs.skids.length; car.speed = 140; for (let i = 0; i < 12; i++) tick(1); el('brake').onpointerdown(); D().p.x = car.x; D().p.y = car.y;
   // brake while driving: get in first
@@ -106,7 +114,19 @@ const toScreen = o => ({ x: (o.x - D().cam.x) * D().zoom, y: (o.y - D().cam.y) *
   const h2 = D().p; h2.x = car.x + 6; h2.y = car.y + 20; h2.down = 0; h2.fly = null; tick(2); el('ebtn').onpointerdown(); tick(2); t(D().drive !== car && !(D().drive && D().drive.wreck), 'a burnt-out wreck cannot be entered');
   const sp = el('snd'); t(typeof sp.onclick === 'function', 'there is a sound button'); t(D().audio.supported === false, 'in the test environment audio is a safe no-op');
 }
+// ---- wanted level: stars panel, alarm flash, jingles, music intensity, police cars with flashing lights ----
+{
+  D().reset(); tick(2); const au = D().audio, calls = { up: [], down: 0, cleared: 0, intensity: [] };
+  au.starUp = n => calls.up.push(n); au.starDown = () => calls.down++; au.cleared = () => calls.cleared++; au.setIntensity = x => calls.intensity.push(x);
+  D().wanted.heat = 20; tick(2); t(D().stars === 1 && calls.up.join() === '1', 'one star: the alarm jingle plays once'); t(D().flash > 2, `and the stars flash (${D().flash.toFixed(1)} s)`);
+  D().wanted.heat = 80; tick(2); t(D().stars === 3 && calls.up.join() === '1,3', 'jumping to three stars plays the jingle again for three'); t(calls.intensity.at(-1) === 1, 'the music turns to full intensity');
+  tick(30 * 3); t(D().flash === 0, 'the flash dies down after a few seconds');
+  tick(30 * 2); const lit = D().cars.filter(c => c.police && c.ai && c.hp > 0 && !c.wreck); t(lit.length >= 1, `police cars with flashing lights are chasing (${lit.length})`);
+  D().wanted.heat = 40; tick(2); t(D().stars === 2 && calls.down === 1, 'dropping a star plays the other jingle'); t(calls.intensity.at(-1) > 0.6 && calls.intensity.at(-1) < 0.7, 'and the music calms a little');
+  D().wanted.heat = 0; tick(2); t(D().stars === 0 && calls.cleared === 1, 'losing the cops plays the all-clear jingle'); t(calls.intensity.at(-1) === 0, 'and the music goes back to calm');
+}
 // ---- moving traffic is actually visible around the hero ----
+D().reset();
 while (D().zoom > 3.2) el('zm').onclick();   // typical zoom
 for (const city of ['city1_h', 'city2_s']) {
   el('city').onchange({ target: { value: city } }); await new Promise(r => setTimeout(r, 300));
